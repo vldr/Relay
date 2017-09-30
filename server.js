@@ -47,6 +47,7 @@ wss.on('connection', function(ws) {
 				clients[1].send(msg, { binary: true });
 			}		
 		} else {
+			//console.log(msg);
 			var message = JSON.parse(msg);
 			switch(message.status) {
 				// Join room.
@@ -124,4 +125,3 @@ wss.on('connection', function(ws) {
 		console.log('Client has disconnected...');
 	});
 });
-
