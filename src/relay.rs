@@ -1,49 +1,102 @@
 use tokio::net::{TcpStream};
+use tokio::sync::Mutex;
 use futures_util::{SinkExt, StreamExt};
-use tokio_tungstenite::{accept_async, tungstenite::{Result, Error}};
+use tokio_tungstenite::{accept_async, tungstenite::{Message, Error}, WebSocketStream};
 
 use std::net::SocketAddr;
+use std::sync::Arc;
+use dashmap::DashMap;
+
+struct Client 
+{
+    socket_addr: SocketAddr,
+    websocket_stream: Arc<Mutex<WebSocketStream<TcpStream>>>,
+}
+
+impl Client 
+{
+    fn new(socket_addr: SocketAddr, websocket_stream: WebSocketStream<TcpStream>) -> Arc<Client>
+    {
+        Arc::new(
+            Client {
+                socket_addr,
+                websocket_stream: Arc::new(Mutex::new(websocket_stream)),
+            }
+        )
+    }
+
+    async fn next_message(&self) -> Option<Result<Message, Error>>
+    {
+        let mut websocket_stream = self.websocket_stream.lock().await;
+
+        websocket_stream.next().await
+    }
+
+    async fn send_message(&self, message: Message) -> Result<(), Error> 
+    {
+        let mut websocket_stream = self.websocket_stream.lock().await;
+
+        websocket_stream.send(message).await
+    }
+}
+
+struct Room 
+{
+    size: u64,
+    clients: Vec<Arc<Client>> 
+}
 
 pub struct Relay 
 {
-    
+    rooms: dashmap::DashMap<String, Room>,
 } 
 
 impl Relay {
-    pub fn new() -> Relay 
+    pub fn new() ->  Relay 
     {
-        Relay{}
-    }
-
-    pub async fn accept(&self, peer: SocketAddr, stream: TcpStream) 
-    {
-        if let Err(e) = self.handle(peer, stream).await 
-        {
-            match e 
-            {
-                Error::ConnectionClosed | Error::Protocol(_) | Error::Utf8 => (),
-                err => println!("Error processing connection: {}", err),
-            }
+        Relay {
+            rooms: DashMap::new(),
         }
     }
 
-    async fn handle(&self, _peer: SocketAddr, stream: TcpStream) -> Result<()> 
+    pub async fn handle_connection(&self, tcp_stream: TcpStream, socket_addr: SocketAddr)
     {
-        let mut ws_stream = accept_async(stream).await?;
-    
-        while let Some(Ok(msg)) = ws_stream.next().await 
+        match accept_async(tcp_stream).await
         {
-            if msg.is_text() 
+            Ok(websocket_stream) => 
             {
-                ws_stream.send(msg).await?;
-            } 
-            else if msg.is_binary() 
+                let client = Client::new(socket_addr, websocket_stream);
+
+                while let Some(message) = client.next_message().await
+                {
+                    match message
+                    {
+                        Ok(message) => 
+                        {
+                            self.handle_message(&client, message).await;
+                        },
+                        Err(error) => 
+                        {
+                            println!("Invalid message provided {}", error);
+                            break;
+                        },
+                    }
+                }
+            },
+
+            Err(error) => 
             {
-                
-            }
+                println!("Failed to obtain websocket stream: {}", error);
+            },
         }
-    
-        Ok(())
+        
     }
-    
+
+    async fn handle_message(&self, client: &Client, message: Message)
+    {
+        if message.is_text() 
+        {
+            client.send_message(message).await;
+        }
+    }
 }
