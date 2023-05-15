@@ -1,6 +1,6 @@
 {
     "rust-analyzer.linkedProjects": [
-        ".\\Cargo.toml"
+        "Cargo.toml",
     ],
     "workbench.colorCustomizations": {
         "editorInlayHint.background": "#00000000",

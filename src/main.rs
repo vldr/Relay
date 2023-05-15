@@ -5,7 +5,7 @@ mod relay;
 
 #[tokio::main]
 async fn main() {
-    let relay= Arc::new(relay::Relay::new());
+    let relay = Arc::new(relay::Relay::new());
 
     let addr = "127.0.0.1:9002";
     let listener = TcpListener::bind(&addr).await.expect("Can't listen");

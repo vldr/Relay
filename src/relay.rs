@@ -1,38 +1,52 @@
+use std::net::{SocketAddr};
+use std::str::FromStr;
+use std::sync::{Arc};
+
+use uuid::{Uuid};
+
 use tokio::net::{TcpStream};
-use tokio::sync::Mutex;
-use futures_util::{SinkExt, StreamExt};
+use tokio::sync::{Mutex};
 use tokio_tungstenite::{accept_async, tungstenite::{Message, Error}, WebSocketStream};
 
-use std::net::SocketAddr;
-use std::sync::Arc;
-use dashmap::DashMap;
+use futures_util::{SinkExt, StreamExt};
+use dashmap::{DashMap};
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum Packet {
+    CreateRoom { size: Option<u64> },
+    JoinRoom { id: String },
+}
 
 struct Client 
 {
     socket_addr: SocketAddr,
-    websocket_stream: Arc<Mutex<WebSocketStream<TcpStream>>>,
+    websocket_stream: Mutex<WebSocketStream<TcpStream>>,
 }
 
 impl Client 
 {
-    fn new(socket_addr: SocketAddr, websocket_stream: WebSocketStream<TcpStream>) -> Arc<Client>
+    pub fn new(socket_addr: SocketAddr, websocket_stream: WebSocketStream<TcpStream>) -> Arc<Client>
     {
         Arc::new(
-            Client {
+            Client 
+            {
                 socket_addr,
-                websocket_stream: Arc::new(Mutex::new(websocket_stream)),
+                websocket_stream: Mutex::new(websocket_stream),
             }
         )
     }
 
-    async fn next_message(&self) -> Option<Result<Message, Error>>
+    pub async fn next_message(&self) -> Option<Result<Message, Error>>
     {
         let mut websocket_stream = self.websocket_stream.lock().await;
 
         websocket_stream.next().await
     }
 
-    async fn send_message(&self, message: Message) -> Result<(), Error> 
+    pub async fn send_message(&self, message: Message) -> Result<(), Error> 
     {
         let mut websocket_stream = self.websocket_stream.lock().await;
 
@@ -42,17 +56,42 @@ impl Client
 
 struct Room 
 {
+    id: String,
     size: u64,
-    clients: Vec<Arc<Client>> 
+    users: Vec<Arc<Client>> 
+}
+
+impl Room 
+{
+    fn new(size: u64) -> Uuid
+    {
+        return Uuid::new_v4();
+    }
+
+    fn add(&mut self, client: Arc<Client>) 
+    {
+        self.users.push(client);
+    }
+
+    fn length(&mut self) -> usize 
+    {
+        return self.users.len();
+    }
+
+    fn remove(&mut self, client: Arc<Client>) 
+    {
+        self.users.retain(|x| x.socket_addr != client.socket_addr);
+    }
 }
 
 pub struct Relay 
 {
     rooms: dashmap::DashMap<String, Room>,
-} 
+}
 
-impl Relay {
-    pub fn new() ->  Relay 
+impl Relay 
+{
+    pub fn new() -> Relay 
     {
         Relay {
             rooms: DashMap::new(),
@@ -77,8 +116,7 @@ impl Relay {
                         },
                         Err(error) => 
                         {
-                            println!("Invalid message provided {}", error);
-                            break;
+                            println!("Invalid message provided: {}", error);
                         },
                     }
                 }
@@ -94,9 +132,28 @@ impl Relay {
 
     async fn handle_message(&self, client: &Client, message: Message)
     {
-        if message.is_text() 
+        if message.is_text()
         {
-            client.send_message(message).await;
+            if let Ok(text) = message.into_text()
+            {
+                if let Ok(packet) = serde_json::from_str(&text) 
+                {
+                    match packet {
+                        Packet::CreateRoom { size } => self.handle_create_room(client, size),
+                        Packet::JoinRoom { id } => self.handle_join_room(client, id),
+                    }
+                }
+            }
         }
+    }
+
+    fn handle_create_room(&self, client: &Client, size: Option<u64>)
+    {
+        println!("CreateRoom {:?}", size);
+    }
+
+    fn handle_join_room(&self, client: &Client, id: String)
+    {
+        println!("Join Room {:?}", id);
     }
 }
