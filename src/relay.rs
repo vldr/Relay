@@ -51,7 +51,6 @@ impl PacketSender for Sender
 
 struct Room 
 {
-    id: String,
     size: u8,
     senders: Vec<Sender>,
 }
@@ -61,7 +60,6 @@ impl Room
     fn new(size: u8) -> Room
     {
         Room {
-            id: Uuid::new_v4().to_string(),
             senders: Vec::new(),
             size,
         }
@@ -128,15 +126,15 @@ impl Client
             return self.sender.send_error_packet(format!("You're already in a room."));
         }
 
+        let room_id = Uuid::new_v4().to_string();
+        self.room_id = Some(room_id.clone());
+
         let mut room = Room::new(size);
-        self.room_id = Some(room.id.clone());
-
         room.senders.push(self.sender.clone());
-
-        let packet = TransmitPacket::CreateRoom { id: room.id.clone() };
-        relay.rooms.insert(room.id.clone(), room);
-
-        return self.sender.send_packet(packet);
+        
+        relay.rooms.insert(room_id.clone(), room);
+        
+        return self.sender.send_packet(TransmitPacket::CreateRoom { id: room_id.clone() });
     }
 
     fn handle_join_room(&self, id: String) -> Result<()>
