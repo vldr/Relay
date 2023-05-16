@@ -119,16 +119,16 @@ impl Client
     {
         let relay = get_relay!(self);
 
+        if relay.rooms.iter().any(|(_, room)| room.clients.iter().any(|client| client.sender == self.sender)) 
+        {
+            return self.send_error_packet(format!("You're already in a room."));
+        }
+
         if let Some(room) = relay.rooms.get_mut(&id)
         {
             if room.clients.len() >= room.size.into()
             {
                 return self.send_error_packet(format!("The room is full."));
-            }
-
-            if relay.hosts.iter().any(|(sender, _)| *sender == self.sender) 
-            {
-                return self.send_error_packet(format!("You're already in a room."));
             }
             
             room.clients.push(self.clone());

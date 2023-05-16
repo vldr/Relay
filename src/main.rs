@@ -5,7 +5,6 @@ mod relay;
 fn main() 
 {
     let relay = relay::Relay::new();
-
     let ws = Builder::new()
         .with_settings(Settings {
             queue_size: 10000,
