@@ -1,18 +1,13 @@
-use std::net::{SocketAddr};
-use std::sync::{Arc};
-
+use std::{collections::HashMap, rc::{Rc}, cell::{UnsafeCell}};
+use ws::{Handler, Message, Result, Sender};
+use serde::{Deserialize, Serialize};
 use uuid::{Uuid};
 
-use tokio::net::{TcpStream};
-use tokio::sync::{Mutex};
-use tokio_tungstenite::{accept_async, tungstenite::{Message, Error}, WebSocketStream};
-
-use futures_util::{SinkExt, StreamExt};
-use dashmap::{DashMap};
-
-use serde::{Deserialize, Serialize};
-
-const DEFAULT_ROOM_SIZE: u8 = 2;
+macro_rules! get_relay {
+    ($self:expr) => {
+        unsafe { &mut *$self.relay.get() }
+    };
+}
 
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -29,206 +24,190 @@ enum TransmitPacket {
     Error { message: String },
 }
 
-struct Client 
-{
-    socket_addr: SocketAddr,
-    websocket_stream: Mutex<WebSocketStream<TcpStream>>,
-}
-
-impl Client 
-{
-    pub fn new(socket_addr: SocketAddr, websocket_stream: WebSocketStream<TcpStream>) -> Arc<Client>
-    {
-        Arc::new(
-            Client 
-            {
-                socket_addr,
-                websocket_stream: Mutex::new(websocket_stream),
-            }
-        )
-    }
-
-    pub async fn next_message(&self) -> Option<Result<Message, Error>>
-    {
-        let mut websocket_stream = self.websocket_stream.lock().await;
-
-        websocket_stream.next().await
-    }
-
-    pub async fn send_message(&self, message: Message) -> Result<(), Error> 
-    {
-        let mut websocket_stream = self.websocket_stream.lock().await;
-
-        websocket_stream.send(message).await
-    }
-}
-
 struct Room 
 {
     id: String,
-    users: Vec<Arc<Client>>,
     size: u8,
+    clients: Vec<Client>,
 }
 
 impl Room 
 {
     fn new(size: u8) -> Room
     {
-        return Room {
+        Room {
             id: Uuid::new_v4().to_string(),
-            users: vec![],
+            clients: Vec::new(),
             size,
-        };
-    }
-
-    fn add(&mut self, client: Arc<Client>) 
-    {
-        self.users.push(client);
-    }
-
-    fn length(&mut self) -> usize 
-    {
-        return self.users.len();
-    }
-
-    fn remove(&mut self, client: Arc<Client>) 
-    {
-        self.users.retain(|x| x.socket_addr != client.socket_addr);
+        }
     }
 }
 
 pub struct Relay 
 {
-    rooms: dashmap::DashMap<String, Room>,
-    sockets: dashmap::DashMap<SocketAddr, String>,
+    rooms: HashMap<String, Room>,
+    hosts: HashMap<Sender, Sender>,
 }
 
 impl Relay 
 {
-    pub fn new() -> Relay 
+    pub fn new() -> Rc<UnsafeCell<Relay>>
     {
-        Relay {
-            rooms: DashMap::new(),
-            sockets: DashMap::new(),
-        }
+        Rc::new(
+            UnsafeCell::new(
+                Relay{
+                    rooms: HashMap::new(),
+                    hosts: HashMap::new(),
+                }
+            )
+        )
+    }
+}
+
+#[derive(Clone)]
+pub struct Client 
+{
+    relay: Rc<UnsafeCell<Relay>>,
+    sender: Sender,
+
+    room: Option<String>
+}
+
+impl Client
+{
+    const DEFAULT_ROOM_SIZE: u8 = 2;
+
+    pub fn new(relay: Rc<UnsafeCell<Relay>>, sender: Sender) -> Client
+    {
+        Client { relay, sender, room: None }
     }
 
-    pub async fn handle_connection(&self, tcp_stream: TcpStream, socket_addr: SocketAddr)
+    fn handle_create_room(&mut self, size_option: Option<u8>) -> Result<()>
     {
-        match accept_async(tcp_stream).await
-        {
-            Ok(websocket_stream) => 
-            {
-                let client = Client::new(socket_addr, websocket_stream);
-    
-                while let Some(message) = client.next_message().await
-                {
-                    match message
-                    {
-                        Ok(message) => 
-                        {
-                            self.handle_message(client.clone(), message).await;
-                        },
-                        Err(error) => 
-                        {
-                            println!("Invalid message provided: {}", error);
-                        },
-                    }
-                }
-            },
+        let relay = get_relay!(self);
 
-            Err(error) => 
-            {
-                println!("Failed to obtain websocket stream: {}", error);
-            },
-        }
-        
-    }
-
-    async fn handle_message(&self, client: Arc<Client>, message: Message)
-    {
-        if message.is_text()
-        {
-            if let Some(socket) = self.sockets.get(&client.socket_addr) 
-            {
-                if let Some(room) = self.rooms.get(socket.value()) 
-                {
-                    client.send_message(Message::Text(room.id.clone())).await;
-                    return;
-                }
-            }
-
-            if let Ok(text) = message.into_text()
-            {
-                if let Ok(packet) = serde_json::from_str(&text) 
-                {
-                    match packet {
-                        ReceivePacket::CreateRoom { size } => self.handle_create_room(client, size).await,
-                        ReceivePacket::JoinRoom { id } => self.handle_join_room(client, id).await,
-                    }
-                }
-            }
-        }
-    }
-
-    async fn handle_create_room(&self, client: Arc<Client>, size_option: Option<u8>)
-    {
-        let size = size_option.unwrap_or(DEFAULT_ROOM_SIZE);
+        let size = size_option.unwrap_or(Self::DEFAULT_ROOM_SIZE);
         if size == 0 
         {
-            return self.send_error_packet(client, format!("The size value of '{}' is not valid.", size)).await;   
+            return self.send_error_packet(format!("The size value of '{}' is not valid.", size));
+        }
+
+        if relay.rooms.iter().any(|(_, room)| room.clients.iter().any(|client| client.sender == self.sender)) 
+        {
+            return self.send_error_packet(format!("You're already in a room."));
         }
 
         let mut room = Room::new(size);
-        room.add(client.clone());
+        room.clients.push(self.clone());
+
+        self.room = Some(room.id.clone());
 
         let packet = TransmitPacket::CreateRoom { id: room.id.clone() };
+        relay.rooms.insert(room.id.clone(), room);
 
-        self.sockets.insert(client.socket_addr, room.id.clone());
-        self.rooms.insert(room.id.clone(), room);
-
-        self.send_packet(client, packet).await;
+        return self.send_packet(packet);
     }
 
-    async fn handle_join_room(&self, client: Arc<Client>, id: String)
+    fn handle_join_room(&self, id: String) -> Result<()>
     {
-        if let Some(mut room) = self.rooms.get_mut(&id) 
+        let relay = get_relay!(self);
+
+        if let Some(room) = relay.rooms.get_mut(&id)
         {
-            if room.length() >= room.size.into()
+            if relay.hosts.iter().any(|(sender, _)| *sender == self.sender) 
             {
-                return self.send_error_packet(client, format!("The room is full.")).await;
+                return self.send_error_packet(format!("You're already in a room."));
             }
 
-            self.sockets.insert(client.socket_addr, room.id.clone());
-            room.add(client.clone());
+            if room.clients.len() >= room.size.into()
+            {
+                return self.send_error_packet(format!("The room is full."));
+            }
 
-            self.send_packet(client, TransmitPacket::JoinRoom).await;
+            relay.hosts.insert(self.sender.clone(), room.clients[0].sender.clone());
+
+            room.clients.push(self.clone());
+            room.clients[0].send_packet(TransmitPacket::JoinRoom)?;
+
+            return self.send_packet(TransmitPacket::JoinRoom);
         }
-        else 
-        {
-            return self.send_error_packet(client, format!("The room '{}' does not exist.", id)).await;  
-        }
+        
+        return self.send_error_packet(format!("The room '{}' does not exist.", id));  
     }
 
-    async fn send_packet(&self, client: Arc<Client>, packet: TransmitPacket)
+    fn send_packet(&self, packet: TransmitPacket) -> Result<()>
     {
         let serialized_packet = serde_json::to_string(&packet).unwrap();
 
-        if let Err(error) = client.send_message(Message::Text(serialized_packet)).await 
-        {
-            println!("Failed to send packet: {}", error);
-        } 
+        self.sender.send(Message::Text(serialized_packet))
     }
 
-    async fn send_error_packet(&self, client: Arc<Client>, message: String)
+    fn send_error_packet(&self, message: String) -> Result<()>
     {
         let error_packet = TransmitPacket::Error { message };
         let serialized_error_packet = serde_json::to_string(&error_packet).unwrap();
 
-        if let Err(error) = client.send_message(Message::Text(serialized_error_packet)).await 
-        {
-            println!("Failed to send error packet: {}", error);
-        }
+        self.sender.send(Message::Text(serialized_error_packet))
     }
+}
 
+impl Handler for Client
+{
+    fn on_message(&mut self, message: Message) -> Result<()> 
+    {
+        if message.is_text() 
+        {
+            if let Ok(text) = message.into_text()
+            {
+                if let Ok(packet) = serde_json::from_str(&text) 
+                {
+                    match packet 
+                    {
+                        ReceivePacket::CreateRoom { size } => self.handle_create_room(size)?,
+                        ReceivePacket::JoinRoom { id } => self.handle_join_room(id)?,
+                    }
+                }
+            }
+        }
+        else if message.is_binary()
+        {
+            let relay = get_relay!(self);
+
+            if let Some(host) = relay.hosts.get(&self.sender) 
+            {
+                return host.send(message);
+            }
+            else if let Some(room_id) = self.room.clone()
+            {
+                if let Some(room) = relay.rooms.get(&room_id) 
+                {
+                    let data = message.into_data();
+                    if data.len() > 0
+                    {
+                        let index = data[0];
+                        let message = Message::Binary(data[1..].to_vec());
+
+                        if index > 0 && usize::from(index) < room.clients.len()
+                        {
+                            return room.clients[usize::from(index)].sender.send(message);
+                        }
+                        else if index == 0
+                        {
+                            for client in &room.clients 
+                            {   
+                                if client.sender == self.sender 
+                                {
+                                    continue;
+                                }
+        
+                                client.sender.send(message.clone())?;                            
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    } 
 }
