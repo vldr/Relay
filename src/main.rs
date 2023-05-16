@@ -1,4 +1,4 @@
-use ws::{listen};
+use ws::{Builder, Settings};
 
 mod relay;
 
@@ -6,7 +6,13 @@ fn main()
 {
     let relay = relay::Relay::new();
 
-    listen("127.0.0.1:8000", 
- |sender| relay::Client::new(relay.clone(), sender)
-    ).expect("Failed to listen");
+    let ws = Builder::new()
+        .with_settings(Settings {
+            queue_size: 10000,
+            ..Settings::default()
+        })
+        .build(|sender| relay::Client::new(relay.clone(), sender))
+        .unwrap();
+
+    ws.listen("0.0.0.0:1234").expect("Failed to start websocket server.");
 }

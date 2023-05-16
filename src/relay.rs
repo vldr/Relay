@@ -77,7 +77,7 @@ pub struct Client
     relay: Rc<UnsafeCell<Relay>>,
     sender: Sender,
 
-    room: Option<String>
+    room_id: Option<String>
 }
 
 impl Client
@@ -86,7 +86,7 @@ impl Client
 
     pub fn new(relay: Rc<UnsafeCell<Relay>>, sender: Sender) -> Client
     {
-        Client { relay, sender, room: None }
+        Client { relay, sender, room_id: None }
     }
 
     fn handle_create_room(&mut self, size_option: Option<u8>) -> Result<()>
@@ -107,7 +107,7 @@ impl Client
         let mut room = Room::new(size);
         room.clients.push(self.clone());
 
-        self.room = Some(room.id.clone());
+        self.room_id = Some(room.id.clone());
 
         let packet = TransmitPacket::CreateRoom { id: room.id.clone() };
         relay.rooms.insert(room.id.clone(), room);
@@ -141,7 +141,6 @@ impl Client
 
             relay.hosts.insert(self.sender.clone(), client_tuple);
 
-
             return self.send_packet(TransmitPacket::JoinRoom);
         }
         
@@ -166,7 +165,6 @@ impl Client
 
         sender.send(Message::Text(serialized_packet))
     }
-
 }
 
 impl Handler for Client
@@ -201,7 +199,7 @@ impl Handler for Client
 
             relay.hosts.remove(&self.sender);
         }
-        else if let Some(room_id) = self.room.clone()
+        else if let Some(room_id) = self.room_id.clone()
         {
             if let Some(room) = relay.rooms.remove(&room_id)
             {
@@ -222,6 +220,8 @@ impl Handler for Client
                     }
                 }
             }
+
+            self.room_id = None;
         }
     }
 
@@ -252,7 +252,7 @@ impl Handler for Client
 
                 return client_tuple.host.send(data);
             }
-            else if let Some(room_id) = self.room.clone()
+            else if let Some(room_id) = self.room_id.clone()
             {
                 if let Some(room) = relay.rooms.get(&room_id) 
                 {
@@ -277,18 +277,18 @@ impl Handler for Client
         
                                 client.sender.send(message.clone())?;                            
                             }
+
+                            return Ok(());
                         }
                     }
                 }
                 else 
                 {
-                    unreachable!();
+                    self.room_id = None;
                 }
             }
-            else 
-            {
-                self.send_error_packet(format!("You're not currently in a room."))?;
-            }
+
+            return self.send_error_packet(format!("You're not currently in a room."));
         }
 
         Ok(())
