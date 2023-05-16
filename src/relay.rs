@@ -21,6 +21,7 @@ enum ReceivePacket {
 enum TransmitPacket {
     JoinRoom,
     CreateRoom { id: String },
+    LeaveRoom { index: usize },
     Error { message: String },
 }
 
@@ -114,14 +115,14 @@ impl Client
 
         if let Some(room) = relay.rooms.get_mut(&id)
         {
-            if relay.hosts.iter().any(|(sender, _)| *sender == self.sender) 
-            {
-                return self.send_error_packet(format!("You're already in a room."));
-            }
-
             if room.clients.len() >= room.size.into()
             {
                 return self.send_error_packet(format!("The room is full."));
+            }
+
+            if relay.hosts.iter().any(|(sender, _)| *sender == self.sender) 
+            {
+                return self.send_error_packet(format!("You're already in a room."));
             }
 
             relay.hosts.insert(self.sender.clone(), room.clients[0].sender.clone());
@@ -137,22 +138,81 @@ impl Client
 
     fn send_packet(&self, packet: TransmitPacket) -> Result<()>
     {
-        let serialized_packet = serde_json::to_string(&packet).unwrap();
-
-        self.sender.send(Message::Text(serialized_packet))
+        self.send_packet_to_sender(self.sender.clone(), packet)
     }
 
     fn send_error_packet(&self, message: String) -> Result<()>
     {
         let error_packet = TransmitPacket::Error { message };
-        let serialized_error_packet = serde_json::to_string(&error_packet).unwrap();
 
-        self.sender.send(Message::Text(serialized_error_packet))
+        self.send_packet_to_sender(self.sender.clone(), error_packet)
     }
+
+    fn send_packet_to_sender(&self, sender: Sender, packet: TransmitPacket) -> Result<()>
+    {
+        let serialized_packet = serde_json::to_string(&packet).unwrap();
+
+        sender.send(Message::Text(serialized_packet))
+    }
+
 }
 
 impl Handler for Client
 {
+    fn on_close(&mut self, _: ws::CloseCode, _: &str) 
+    {
+        let relay = get_relay!(self);
+
+        if let Some(host) = relay.hosts.get(&self.sender) 
+        {
+            for (_, room) in &mut relay.rooms 
+            {
+                let mut index = 0;
+
+                for client in &room.clients 
+                {
+                    if client.sender == self.sender 
+                    {
+                        room.clients.remove(index);
+        
+                        if let Err(error) = self.send_packet_to_sender(host.clone(), TransmitPacket::LeaveRoom { index })
+                        {
+                            println!("Failed to send leave room packet: {}", error);
+                        }
+
+                        break;
+                    }
+
+                    index += 1;
+                }
+            }
+
+            relay.hosts.remove(&self.sender);
+        }
+        else if let Some(room_id) = self.room.clone()
+        {
+            if let Some(room) = relay.rooms.remove(&room_id)
+            {
+                for client in &room.clients 
+                {
+                    if client.sender == self.sender 
+                    {
+                        continue;
+                    }
+
+                    relay.hosts.remove(&client.sender);
+
+                    if let Err(error) = self.send_packet_to_sender(client.sender.clone(), 
+                  TransmitPacket::Error { message: format!("The host has left the room.") }
+                    )
+                    {
+                        println!("Failed to send leave room packet: {}", error);
+                    }
+                }
+            }
+        }
+    }
+
     fn on_message(&mut self, message: Message) -> Result<()> 
     {
         if message.is_text() 
@@ -205,6 +265,14 @@ impl Handler for Client
                         }
                     }
                 }
+                else 
+                {
+                    unreachable!();
+                }
+            }
+            else 
+            {
+                self.send_error_packet(format!("You're not currently in a room."))?;
             }
         }
 
