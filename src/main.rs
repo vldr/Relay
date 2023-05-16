@@ -12,7 +12,7 @@ fn main()
             ..Settings::default()
         })
         .build(|sender| relay::Client::new(relay.clone(), sender))
-        .unwrap();
+        .expect("Failed to build websocket server.");
 
     ws.listen("0.0.0.0:1234").expect("Failed to start websocket server.");
 }

@@ -105,9 +105,9 @@ impl Client
         }
 
         let mut room = Room::new(size);
-        room.clients.push(self.clone());
-
         self.room_id = Some(room.id.clone());
+
+        room.clients.push(self.clone());
 
         let packet = TransmitPacket::CreateRoom { id: room.id.clone() };
         relay.rooms.insert(room.id.clone(), room);
@@ -147,6 +147,62 @@ impl Client
         return self.send_error_packet(format!("The room '{}' does not exist.", id));  
     }
 
+    fn handle_leave_room(&mut self) -> Result<()> 
+    {
+        let relay = get_relay!(self);
+
+        if let Some(client_tuple) = relay.hosts.get(&self.sender) 
+        {
+            for (_, room) in &mut relay.rooms 
+            {
+                let mut index = 0;
+
+                for client in &room.clients 
+                {
+                    if client.sender == self.sender 
+                    {
+                        room.clients.remove(index);
+        
+                        self.send_packet_to_sender(
+                            client_tuple.host.clone(), 
+                            TransmitPacket::LeaveRoom { index }
+                        )?;
+
+                        break;
+                    }
+
+                    index += 1;
+                }
+            }
+
+            relay.hosts.remove(&self.sender);
+        }
+        else if let Some(room_id) = self.room_id.clone()
+        {
+            if let Some(room) = relay.rooms.remove(&room_id)
+            {
+                for client in &room.clients 
+                {
+                    if client.sender == self.sender 
+                    {
+                        continue;
+                    }
+
+                    relay.hosts.remove(&client.sender);
+
+                    self.send_packet_to_sender(
+                        client.sender.clone(), 
+                        TransmitPacket::Error { message: format!("The host has left the room.") }
+                    )?;
+                }
+            }
+
+            self.room_id = None;
+        }
+
+        Ok(())
+    }
+
     fn send_packet(&self, packet: TransmitPacket) -> Result<()>
     {
         self.send_packet_to_sender(self.sender.clone(), packet)
@@ -171,57 +227,9 @@ impl Handler for Client
 {
     fn on_close(&mut self, _: ws::CloseCode, _: &str) 
     {
-        let relay = get_relay!(self);
-
-        if let Some(client_tuple) = relay.hosts.get(&self.sender) 
+        if let Err(error) = self.handle_leave_room() 
         {
-            for (_, room) in &mut relay.rooms 
-            {
-                let mut index = 0;
-
-                for client in &room.clients 
-                {
-                    if client.sender == self.sender 
-                    {
-                        room.clients.remove(index);
-        
-                        if let Err(error) = self.send_packet_to_sender(client_tuple.host.clone(), TransmitPacket::LeaveRoom { index })
-                        {
-                            println!("Failed to send leave room packet: {}", error);
-                        }
-
-                        break;
-                    }
-
-                    index += 1;
-                }
-            }
-
-            relay.hosts.remove(&self.sender);
-        }
-        else if let Some(room_id) = self.room_id.clone()
-        {
-            if let Some(room) = relay.rooms.remove(&room_id)
-            {
-                for client in &room.clients 
-                {
-                    if client.sender == self.sender 
-                    {
-                        continue;
-                    }
-
-                    relay.hosts.remove(&client.sender);
-
-                    if let Err(error) = self.send_packet_to_sender(client.sender.clone(), 
-                  TransmitPacket::Error { message: format!("The host has left the room.") }
-                    )
-                    {
-                        println!("Failed to send leave room packet: {}", error);
-                    }
-                }
-            }
-
-            self.room_id = None;
+            println!("Failed to leave room: {error}");    
         }
     }
 
@@ -281,10 +289,6 @@ impl Handler for Client
                             return Ok(());
                         }
                     }
-                }
-                else 
-                {
-                    self.room_id = None;
                 }
             }
 
