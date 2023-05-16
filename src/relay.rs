@@ -14,6 +14,7 @@ macro_rules! get_relay {
 enum ReceivePacket {
     CreateRoom { size: Option<u8> },
     JoinRoom { id: String },
+    LeaveRoom,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -25,11 +26,34 @@ enum TransmitPacket {
     Error { message: String },
 }
 
+trait PacketSender 
+{
+    fn send_packet(&self, packet: TransmitPacket) -> Result<()>;
+    fn send_error_packet(&self, message: String) -> Result<()>;
+}
+
+impl PacketSender for Sender 
+{
+    fn send_packet(&self, packet: TransmitPacket) -> Result<()>
+    {
+        let serialized_packet = serde_json::to_string(&packet).unwrap();
+
+        self.send(Message::Text(serialized_packet))
+    }
+
+    fn send_error_packet(&self, message: String) -> Result<()>
+    {
+        let error_packet = TransmitPacket::Error { message };
+
+        self.send_packet(error_packet)
+    }
+}
+
 struct Room 
 {
     id: String,
     size: u8,
-    clients: Vec<Client>,
+    senders: Vec<Sender>,
 }
 
 impl Room 
@@ -38,7 +62,7 @@ impl Room
     {
         Room {
             id: Uuid::new_v4().to_string(),
-            clients: Vec::new(),
+            senders: Vec::new(),
             size,
         }
     }
@@ -47,7 +71,7 @@ impl Room
 pub struct Relay 
 {
     rooms: HashMap<String, Room>,
-    hosts: HashMap<Sender, ClientTuple>,
+    hosts: HashMap<Sender, SenderTuple>,
 }
 
 impl Relay 
@@ -66,8 +90,8 @@ impl Relay
 }
 
 #[derive(Clone)]
-pub struct ClientTuple {
-    index: u8,
+pub struct SenderTuple {
+    index: usize,
     host: Sender
 }
 
@@ -75,8 +99,8 @@ pub struct ClientTuple {
 pub struct Client 
 {
     relay: Rc<UnsafeCell<Relay>>,
-    sender: Sender,
 
+    sender: Sender,
     room_id: Option<String>
 }
 
@@ -96,78 +120,74 @@ impl Client
         let size = size_option.unwrap_or(Self::DEFAULT_ROOM_SIZE);
         if size == 0 
         {
-            return self.send_error_packet(format!("The size value of '{}' is not valid.", size));
+            return self.sender.send_error_packet(format!("The size value of '{}' is not valid.", size));
         }
 
-        if relay.rooms.iter().any(|(_, room)| room.clients.iter().any(|client| client.sender == self.sender)) 
+        if relay.rooms.iter().any(|(_, room)| room.senders.iter().any(|sender| *sender == self.sender)) 
         {
-            return self.send_error_packet(format!("You're already in a room."));
+            return self.sender.send_error_packet(format!("You're already in a room."));
         }
 
         let mut room = Room::new(size);
         self.room_id = Some(room.id.clone());
 
-        room.clients.push(self.clone());
+        room.senders.push(self.sender.clone());
 
         let packet = TransmitPacket::CreateRoom { id: room.id.clone() };
         relay.rooms.insert(room.id.clone(), room);
 
-        return self.send_packet(packet);
+        return self.sender.send_packet(packet);
     }
 
     fn handle_join_room(&self, id: String) -> Result<()>
     {
         let relay = get_relay!(self);
 
-        if relay.rooms.iter().any(|(_, room)| room.clients.iter().any(|client| client.sender == self.sender)) 
+        if relay.rooms.iter().any(|(_, room)| room.senders.iter().any(|sender| *sender == self.sender)) 
         {
-            return self.send_error_packet(format!("You're already in a room."));
+            return self.sender.send_error_packet(format!("You're already in a room."));
         }
 
         if let Some(room) = relay.rooms.get_mut(&id)
         {
-            if room.clients.len() >= room.size.into()
+            if room.senders.len() >= room.size.into()
             {
-                return self.send_error_packet(format!("The room is full."));
+                return self.sender.send_error_packet(format!("The room is full."));
             }
             
-            room.clients.push(self.clone());
-            room.clients[0].send_packet(TransmitPacket::JoinRoom)?;
+            room.senders.push(self.sender.clone());
+            room.senders[0].send_packet(TransmitPacket::JoinRoom)?;
 
-            let client_tuple = ClientTuple { 
-                index: (room.clients.len() - 1).try_into().unwrap(),
-                host: room.clients[0].sender.clone(), 
+            let sender_tuple = SenderTuple { 
+                host: room.senders[0].clone(), 
+                index: room.senders.len() - 1,
             };
 
-            relay.hosts.insert(self.sender.clone(), client_tuple);
+            relay.hosts.insert(self.sender.clone(), sender_tuple);
 
-            return self.send_packet(TransmitPacket::JoinRoom);
+            return self.sender.send_packet(TransmitPacket::JoinRoom);
         }
         
-        return self.send_error_packet(format!("The room '{}' does not exist.", id));  
+        return self.sender.send_error_packet(format!("The room '{}' does not exist.", id));  
     }
 
     fn handle_leave_room(&mut self) -> Result<()> 
     {
         let relay = get_relay!(self);
 
-        if let Some(client_tuple) = relay.hosts.get(&self.sender) 
+        if let Some(sender_tuple) = relay.hosts.get(&self.sender) 
         {
             for (_, room) in &mut relay.rooms 
             {
                 let mut index = 0;
 
-                for client in &room.clients 
+                for sender in &room.senders 
                 {
-                    if client.sender == self.sender 
+                    if *sender == self.sender 
                     {
-                        room.clients.remove(index);
+                        room.senders.remove(index);
         
-                        self.send_packet_to_sender(
-                            client_tuple.host.clone(), 
-                            TransmitPacket::LeaveRoom { index }
-                        )?;
-
+                        sender_tuple.host.send_packet(TransmitPacket::LeaveRoom { index })?;
                         break;
                     }
 
@@ -181,17 +201,16 @@ impl Client
         {
             if let Some(room) = relay.rooms.remove(&room_id)
             {
-                for client in &room.clients 
+                for sender in room.senders 
                 {
-                    if client.sender == self.sender 
+                    if sender == self.sender 
                     {
                         continue;
                     }
 
-                    relay.hosts.remove(&client.sender);
+                    relay.hosts.remove(&sender);
 
-                    self.send_packet_to_sender(
-                        client.sender.clone(), 
+                    sender.send_packet(
                         TransmitPacket::Error { message: format!("The host has left the room.") }
                     )?;
                 }
@@ -202,25 +221,6 @@ impl Client
 
         Ok(())
     }
-
-    fn send_packet(&self, packet: TransmitPacket) -> Result<()>
-    {
-        self.send_packet_to_sender(self.sender.clone(), packet)
-    }
-
-    fn send_error_packet(&self, message: String) -> Result<()>
-    {
-        let error_packet = TransmitPacket::Error { message };
-
-        self.send_packet_to_sender(self.sender.clone(), error_packet)
-    }
-
-    fn send_packet_to_sender(&self, sender: Sender, packet: TransmitPacket) -> Result<()>
-    {
-        let serialized_packet = serde_json::to_string(&packet).unwrap();
-
-        sender.send(Message::Text(serialized_packet))
-    }
 }
 
 impl Handler for Client
@@ -229,7 +229,7 @@ impl Handler for Client
     {
         if let Err(error) = self.handle_leave_room() 
         {
-            println!("Failed to leave room: {error}");    
+            println!("Failed to leave room: {}", error);    
         }
     }
 
@@ -245,6 +245,7 @@ impl Handler for Client
                     {
                         ReceivePacket::CreateRoom { size } => self.handle_create_room(size)?,
                         ReceivePacket::JoinRoom { id } => self.handle_join_room(id)?,
+                        ReceivePacket::LeaveRoom => self.handle_leave_room()?,
                     }
                 }
             }
@@ -253,37 +254,38 @@ impl Handler for Client
         {
             let relay = get_relay!(self);
 
-            if let Some(client_tuple) = relay.hosts.get(&self.sender) 
+            if let Some(sender_tuple) = relay.hosts.get(&self.sender) 
             {
                 let mut data = message.into_data();
-                data.insert(0, client_tuple.index);
+                data.insert(0, sender_tuple.index.try_into().unwrap());
 
-                return client_tuple.host.send(data);
+                return sender_tuple.host.send(data);  
             }
             else if let Some(room_id) = self.room_id.clone()
             {
                 if let Some(room) = relay.rooms.get(&room_id) 
                 {
                     let data = message.into_data();
+
                     if data.len() > 0
                     {
                         let index = data[0];
                         let message = Message::Binary(data[1..].to_vec());
 
-                        if index > 0 && usize::from(index) < room.clients.len()
+                        if index > 0 && usize::from(index) < room.senders.len()
                         {
-                            return room.clients[usize::from(index)].sender.send(message);
+                            return room.senders[usize::from(index)].send(message);
                         }
                         else if index == 0
                         {
-                            for client in &room.clients 
+                            for sender in &room.senders 
                             {   
-                                if client.sender == self.sender 
+                                if *sender == self.sender 
                                 {
                                     continue;
                                 }
         
-                                client.sender.send(message.clone())?;                            
+                                sender.send(message.clone())?;                            
                             }
 
                             return Ok(());
@@ -292,7 +294,7 @@ impl Handler for Client
                 }
             }
 
-            return self.send_error_packet(format!("You're not currently in a room."));
+            return self.sender.send_error_packet(format!("You're not currently in a room."));
         }
 
         Ok(())
