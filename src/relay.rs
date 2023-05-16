@@ -47,7 +47,7 @@ impl Room
 pub struct Relay 
 {
     rooms: HashMap<String, Room>,
-    hosts: HashMap<Sender, Sender>,
+    hosts: HashMap<Sender, ClientTuple>,
 }
 
 impl Relay 
@@ -63,6 +63,12 @@ impl Relay
             )
         )
     }
+}
+
+#[derive(Clone)]
+pub struct ClientTuple {
+    index: u8,
+    host: Sender
 }
 
 #[derive(Clone)]
@@ -124,11 +130,17 @@ impl Client
             {
                 return self.send_error_packet(format!("You're already in a room."));
             }
-
-            relay.hosts.insert(self.sender.clone(), room.clients[0].sender.clone());
-
+            
             room.clients.push(self.clone());
             room.clients[0].send_packet(TransmitPacket::JoinRoom)?;
+
+            let client_tuple = ClientTuple { 
+                index: (room.clients.len() - 1).try_into().unwrap(),
+                host: room.clients[0].sender.clone(), 
+            };
+
+            relay.hosts.insert(self.sender.clone(), client_tuple);
+
 
             return self.send_packet(TransmitPacket::JoinRoom);
         }
@@ -163,7 +175,7 @@ impl Handler for Client
     {
         let relay = get_relay!(self);
 
-        if let Some(host) = relay.hosts.get(&self.sender) 
+        if let Some(client_tuple) = relay.hosts.get(&self.sender) 
         {
             for (_, room) in &mut relay.rooms 
             {
@@ -175,7 +187,7 @@ impl Handler for Client
                     {
                         room.clients.remove(index);
         
-                        if let Err(error) = self.send_packet_to_sender(host.clone(), TransmitPacket::LeaveRoom { index })
+                        if let Err(error) = self.send_packet_to_sender(client_tuple.host.clone(), TransmitPacket::LeaveRoom { index })
                         {
                             println!("Failed to send leave room packet: {}", error);
                         }
@@ -233,9 +245,12 @@ impl Handler for Client
         {
             let relay = get_relay!(self);
 
-            if let Some(host) = relay.hosts.get(&self.sender) 
+            if let Some(client_tuple) = relay.hosts.get(&self.sender) 
             {
-                return host.send(message);
+                let mut data = message.into_data();
+                data.insert(0, client_tuple.index);
+
+                return client_tuple.host.send(data);
             }
             else if let Some(room_id) = self.room.clone()
             {
