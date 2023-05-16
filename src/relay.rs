@@ -175,7 +175,7 @@ impl Client
     {
         let relay = get_relay!(self);
 
-        if let Some(sender_tuple) = relay.hosts.get(&self.sender) 
+        if let Some(sender_tuple) = relay.hosts.remove(&self.sender) 
         {
             for (_, room) in &mut relay.rooms 
             {
@@ -186,16 +186,13 @@ impl Client
                     if *sender == self.sender 
                     {
                         room.senders.remove(index);
-        
-                        sender_tuple.host.send_packet(TransmitPacket::LeaveRoom { index })?;
-                        break;
+
+                        return sender_tuple.host.send_packet(TransmitPacket::LeaveRoom { index });
                     }
 
                     index += 1;
                 }
             }
-
-            relay.hosts.remove(&self.sender);
         }
         else if let Some(room_id) = self.room_id.clone()
         {
@@ -210,16 +207,14 @@ impl Client
 
                     relay.hosts.remove(&sender);
 
-                    sender.send_packet(
-                        TransmitPacket::Error { message: format!("The host has left the room.") }
-                    )?;
+                    sender.send_error_packet(format!("The host has left the room."))?;
                 }
             }
 
             self.room_id = None;
         }
 
-        Ok(())
+        return Ok(());
     }
 }
 
@@ -297,6 +292,6 @@ impl Handler for Client
             return self.sender.send_error_packet(format!("You're not currently in a room."));
         }
 
-        Ok(())
+        return Ok(());
     } 
 }
