@@ -6,8 +6,12 @@ on:
 
 jobs:
   build-and-test:
-    concurrency: ci-${{ github.ref }}
     runs-on: ubuntu-latest
+    services:
+      rust:
+        image: rust:latest
+        ports:
+        - 3012:3012
     steps:
       - name: Checkout
         uses: actions/checkout@v3
