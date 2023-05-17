@@ -7,11 +7,6 @@ on:
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
-    services:
-      rust:
-        image: rust:latest
-        ports:
-        - 3012:3012
     steps:
       - name: Checkout
         uses: actions/checkout@v3
@@ -22,7 +17,7 @@ jobs:
           rust-version: stable
         
       - name: Build
-        run: cargo build --release
+        run: cargo build
 
       - name: Test
         run: cargo test
