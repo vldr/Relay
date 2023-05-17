@@ -1,0 +1,24 @@
+name: Build and Test
+
+on:
+  push:
+    branches: ["master"]
+
+jobs:
+  build-and-test:
+    concurrency: ci-${{ github.ref }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Setup Rust
+        uses: ATiltedTree/setup-rust@v1
+        with:
+          rust-version: stable
+        
+      - name: Build
+        run: cargo build --release
+
+      - name: Test
+        run: cargo test

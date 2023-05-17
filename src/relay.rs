@@ -3,26 +3,28 @@ use ws::{Handler, Message, Result, Sender};
 use serde::{Deserialize, Serialize};
 use uuid::{Uuid};
 
-macro_rules! get_relay {
+macro_rules! get_server {
     ($self:expr) => {
-        unsafe { &mut *$self.relay.get() }
+        unsafe { &mut *$self.server.get() }
     };
 }
 
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
-enum ReceivePacket {
+pub enum ReceivePacket {
     CreateRoom { size: Option<u8> },
     JoinRoom { id: String },
     LeaveRoom,
-}
+} 
 
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
-enum TransmitPacket {
-    JoinRoom,
+pub enum TransmitPacket {
     CreateRoom { id: String },
     LeaveRoom { index: usize },
+    JoinRoom,
+
+    Kick { message: String },
     Error { message: String },
 }
 
@@ -66,19 +68,19 @@ impl Room
     }
 }
 
-pub struct Relay 
+pub struct Server 
 {
     rooms: HashMap<String, Room>,
     hosts: HashMap<Sender, SenderTuple>,
 }
 
-impl Relay 
+impl Server 
 {
-    pub fn new() -> Rc<UnsafeCell<Relay>>
+    pub fn new() -> Rc<UnsafeCell<Server>>
     {
         Rc::new(
             UnsafeCell::new(
-                Relay{
+                Server{
                     rooms: HashMap::new(),
                     hosts: HashMap::new(),
                 }
@@ -96,7 +98,7 @@ pub struct SenderTuple {
 #[derive(Clone)]
 pub struct Client 
 {
-    relay: Rc<UnsafeCell<Relay>>,
+    server: Rc<UnsafeCell<Server>>,
 
     sender: Sender,
     room_id: Option<String>
@@ -106,24 +108,24 @@ impl Client
 {
     const DEFAULT_ROOM_SIZE: u8 = 2;
 
-    pub fn new(relay: Rc<UnsafeCell<Relay>>, sender: Sender) -> Client
+    pub fn new(server: Rc<UnsafeCell<Server>>, sender: Sender) -> Client
     {
-        Client { relay, sender, room_id: None }
+        Client { server, sender, room_id: None }
     }
 
     fn handle_create_room(&mut self, size_option: Option<u8>) -> Result<()>
     {
-        let relay = get_relay!(self);
+        let server = get_server!(self);
 
         let size = size_option.unwrap_or(Self::DEFAULT_ROOM_SIZE);
         if size == 0 
         {
-            return self.sender.send_error_packet(format!("The size value of '{}' is not valid.", size));
+            return self.sender.send_error_packet(format!("You cannot create an empty room."));
         }
 
-        if relay.rooms.iter().any(|(_, room)| room.senders.iter().any(|sender| *sender == self.sender)) 
+        if server.rooms.iter().any(|(_, room)| room.senders.iter().any(|sender| *sender == self.sender)) 
         {
-            return self.sender.send_error_packet(format!("You're already in a room."));
+            return self.sender.send_error_packet(format!("You're currently in a room."));
         }
 
         let room_id = Uuid::new_v4().to_string();
@@ -132,21 +134,21 @@ impl Client
         let mut room = Room::new(size);
         room.senders.push(self.sender.clone());
         
-        relay.rooms.insert(room_id.clone(), room);
+        server.rooms.insert(room_id.clone(), room);
         
         return self.sender.send_packet(TransmitPacket::CreateRoom { id: room_id.clone() });
     }
 
     fn handle_join_room(&self, id: String) -> Result<()>
     {
-        let relay = get_relay!(self);
+        let server = get_server!(self);
 
-        if relay.rooms.iter().any(|(_, room)| room.senders.iter().any(|sender| *sender == self.sender)) 
+        if server.rooms.iter().any(|(_, room)| room.senders.iter().any(|sender| *sender == self.sender)) 
         {
             return self.sender.send_error_packet(format!("You're already in a room."));
         }
 
-        if let Some(room) = relay.rooms.get_mut(&id)
+        if let Some(room) = server.rooms.get_mut(&id)
         {
             if room.senders.len() >= room.size.into()
             {
@@ -161,7 +163,7 @@ impl Client
                 index: room.senders.len() - 1,
             };
 
-            relay.hosts.insert(self.sender.clone(), sender_tuple);
+            server.hosts.insert(self.sender.clone(), sender_tuple);
 
             return self.sender.send_packet(TransmitPacket::JoinRoom);
         }
@@ -171,11 +173,11 @@ impl Client
 
     fn handle_leave_room(&mut self) -> Result<()> 
     {
-        let relay = get_relay!(self);
+        let server = get_server!(self);
 
-        if let Some(sender_tuple) = relay.hosts.remove(&self.sender) 
+        if let Some(sender_tuple) = server.hosts.remove(&self.sender) 
         {
-            for (_, room) in &mut relay.rooms 
+            for (_, room) in &mut server.rooms 
             {
                 let mut index = 0;
 
@@ -194,7 +196,7 @@ impl Client
         }
         else if let Some(room_id) = self.room_id.clone()
         {
-            if let Some(room) = relay.rooms.remove(&room_id)
+            if let Some(room) = server.rooms.remove(&room_id)
             {
                 for sender in room.senders 
                 {
@@ -203,9 +205,9 @@ impl Client
                         continue;
                     }
 
-                    relay.hosts.remove(&sender);
+                    server.hosts.remove(&sender);
 
-                    sender.send_error_packet(format!("The host has left the room."))?;
+                    sender.send_packet(TransmitPacket::Kick { message: format!("The host has left the room.") })?;
                 }
             }
 
@@ -213,7 +215,7 @@ impl Client
         }
 
         return Ok(());
-    }
+    } 
 }
 
 impl Handler for Client
@@ -241,13 +243,17 @@ impl Handler for Client
                         ReceivePacket::LeaveRoom => self.handle_leave_room()?,
                     }
                 }
+                else 
+                {
+                    return self.sender.send_error_packet(format!("The following packet is invalid: {}", text));
+                }
             }
         }
         else if message.is_binary()
         {
-            let relay = get_relay!(self);
+            let server = get_server!(self);
 
-            if let Some(sender_tuple) = relay.hosts.get(&self.sender) 
+            if let Some(sender_tuple) = server.hosts.get(&self.sender) 
             {
                 let mut data = message.into_data();
                 data.insert(0, sender_tuple.index.try_into().unwrap());
@@ -256,7 +262,7 @@ impl Handler for Client
             }
             else if let Some(room_id) = self.room_id.clone()
             {
-                if let Some(room) = relay.rooms.get(&room_id) 
+                if let Some(room) = server.rooms.get(&room_id) 
                 {
                     let data = message.into_data();
 
