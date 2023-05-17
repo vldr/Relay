@@ -4,11 +4,10 @@ mod tests
     use crate::relay::{Server, Client, TransmitPacket, ReceivePacket};
 
     use ws::{Builder, Settings};
+    use std::net::{SocketAddr};
     use tungstenite::{connect, Message};
-    use serial_test::{serial};
     use std::thread::{spawn};
     use std::sync::{mpsc};
-    use std::net::{SocketAddr};
 
     macro_rules! create_socket {
         ($value:expr) => {
@@ -65,14 +64,13 @@ mod tests
                 .expect("Failed to bind test WebSocket server.");
 
             tx.send(ws.local_addr().unwrap()).unwrap();
-            ws.run().unwrap();
+            ws.run().expect("Failed to start test WebSocket server.");
         }); 
 
         return rx.recv().unwrap()
     }
 
     #[test]
-    #[serial]
     fn errors() 
     {
         //
@@ -165,7 +163,6 @@ mod tests
     }
 
     #[test]
-    #[serial]
     fn communication() 
     {
         //
@@ -204,7 +201,18 @@ mod tests
             read_message!(client_socket, TransmitPacket::JoinRoom => ());
 
             client_sockets.push(client_socket);
-        }
+        }       
+        
+        //
+        // Test room bounds.
+        //
+
+        let mut client_socket = create_socket!(socket_addr);
+
+        write_message!(client_socket, ReceivePacket::JoinRoom { id: room_id.clone() } );
+        read_message!(client_socket, TransmitPacket::Error { message } => assert_eq!("The room is full.", message));  
+
+        client_socket.close(None).unwrap();
 
         //
         // Test broadcasting.
@@ -277,7 +285,6 @@ mod tests
     }
 
     #[test]
-    #[serial]
     fn rooms() 
     {
         //
