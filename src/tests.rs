@@ -5,7 +5,7 @@ mod tests
 
     use ws::{Builder, Settings};
     use tungstenite::{connect, Message};
-    use std::thread::{spawn};
+    use std::{thread::{spawn}};
   
     const ADDR_SPEC: &str = "localhost:3012";
 
@@ -36,7 +36,7 @@ mod tests
         ($value:expr, $pattern:pat => $extracted_value:expr) => {
             match serde_json::from_str(&$value.read_message().unwrap().clone().into_text().unwrap()).unwrap() {
                 $pattern => $extracted_value,
-                _ => panic!("pattern doesn't match!"),
+                unknown => panic!("pattern doesn't match: {:?}", unknown),
             }
         };
     }
@@ -52,7 +52,10 @@ mod tests
         spawn(|| {
             let relay = Server::new();
             let ws = Builder::new()
-                .with_settings(Settings::default())
+                .with_settings(Settings {
+                    max_connections: 256,
+                    ..Settings::default()
+                })
                 .build(|sender| Client::new(relay.clone(), sender))
                 .expect("Failed to build test WebSocket server.");
 
@@ -61,7 +64,7 @@ mod tests
     }
 
     #[test]
-    fn test_errors() 
+    fn errors() 
     {
         //
         // Setup test.
@@ -149,12 +152,122 @@ mod tests
         let mut client_socket_2 = create_socket!();
         
         write_message!(client_socket_2, ReceivePacket::JoinRoom { id: room_id.clone() });
-        read_message!(client_socket_2, TransmitPacket::Error { message } => assert_eq!("The room is full.", message));
-
+        read_message!(client_socket_2, TransmitPacket::Error { message } => assert_eq!("The room is full.", message));  
     }
 
     #[test]
-    fn test_create_join_leave_room() 
+    fn communication() 
+    {
+        //
+        // The number of clients to test with.
+        //
+
+        const N: u8 = 255;
+
+        //
+        // Setup test.
+        //
+
+        setup();
+
+        //
+        // Create a room of size N.
+        //
+
+        let mut host_socket = create_socket!();
+
+        write_message!(host_socket, ReceivePacket::CreateRoom { size: Some(N) } );
+        let room_id = read_message!(host_socket, TransmitPacket::CreateRoom { id } => id);
+
+        //
+        // Create N clients.
+        //
+
+        let mut client_sockets = vec![];
+        for _ in 0..N - 1
+        {
+            let mut client_socket = create_socket!();
+
+            write_message!(client_socket, ReceivePacket::JoinRoom { id: room_id.clone() } );
+
+            read_message!(host_socket, TransmitPacket::JoinRoom => ());
+            read_message!(client_socket, TransmitPacket::JoinRoom => ());
+
+            client_sockets.push(client_socket);
+        }
+
+        //
+        // Test broadcasting.
+        //
+
+        write_binary_message!(host_socket, vec![0]);
+        write_binary_message!(host_socket, vec![0, 1, 2]);
+
+        for client_socket in client_sockets.iter_mut()
+        {
+            let data = read_binary_message!(client_socket);
+            assert_eq!(data.len(), 0);
+
+            let data = read_binary_message!(client_socket);
+            assert_eq!(data.len(), 2);
+            assert_eq!(data[0], 1);
+            assert_eq!(data[1], 2);
+        }
+
+        //
+        // Test sending to clients.
+        //
+
+        for (index, client_socket) in client_sockets.iter_mut().enumerate()
+        {
+            write_binary_message!(host_socket, vec![index.try_into().unwrap()]);
+            write_binary_message!(host_socket, vec![index.try_into().unwrap(), 1, 2]);
+
+            let data = read_binary_message!(client_socket);
+            assert_eq!(data.len(), 0);
+
+            let data = read_binary_message!(client_socket);
+            assert_eq!(data.len(), 2);
+            assert_eq!(data[0], 1);
+            assert_eq!(data[1], 2);
+        }
+
+        //
+        // Test sending to host.
+        //
+
+        for (index, client_socket) in client_sockets.iter_mut().enumerate()
+        {
+            write_binary_message!(client_socket, vec![]);
+            write_binary_message!(client_socket, vec![1, 2]);
+
+            let data = read_binary_message!(host_socket);
+            assert_eq!(data.len(), 1);
+            assert_eq!(data[0], <usize as TryInto<u8>>::try_into(index + 1).unwrap());
+
+            let data = read_binary_message!(host_socket);
+            assert_eq!(data.len(), 3);
+            assert_eq!(data[0], <usize as TryInto<u8>>::try_into(index + 1).unwrap());
+            assert_eq!(data[1], 1);
+            assert_eq!(data[2], 2);
+        }
+
+        //
+        // Close host and N clients.
+        //
+        
+        let size = client_sockets.len();
+        for (expected_index, client_socket) in client_sockets.iter_mut().rev().enumerate()
+        {
+            client_socket.close(None).unwrap();
+            read_message!(host_socket, TransmitPacket::LeaveRoom { index } => assert_eq!(size - expected_index, index));
+        }
+
+        host_socket.close(None).unwrap();
+    }
+
+    #[test]
+    fn rooms() 
     {
         //
         // Setup test.

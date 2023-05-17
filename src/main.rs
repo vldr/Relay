@@ -9,7 +9,6 @@ fn main()
     let ws = Builder::new()
         .with_settings(Settings {
             max_connections: 10000,
-            queue_size: 10000,
             ..Settings::default()
         })
         .build(|sender| relay::Client::new(server.clone(), sender))

@@ -3,7 +3,7 @@ use ws::{Handler, Message, Result, Sender};
 use serde::{Deserialize, Serialize};
 use uuid::{Uuid};
 
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ReceivePacket {
     CreateRoom { size: Option<u8> },
@@ -11,7 +11,7 @@ pub enum ReceivePacket {
     LeaveRoom,
 } 
 
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum TransmitPacket {
     CreateRoom { id: String },
@@ -173,9 +173,7 @@ impl Client
         {
             for (_, room) in &mut server.rooms 
             {
-                let mut index = 0;
-
-                for sender in &room.senders 
+                for (index, sender) in room.senders.iter().enumerate()
                 {
                     if *sender == self.sender 
                     {
@@ -183,8 +181,6 @@ impl Client
 
                         return sender_tuple.host.send_packet(TransmitPacket::LeaveRoom { index });
                     }
-
-                    index += 1;
                 }
             }
         }
