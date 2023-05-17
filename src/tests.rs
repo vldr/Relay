@@ -5,7 +5,8 @@ mod tests
 
     use ws::{Builder, Settings};
     use tungstenite::{connect, Message};
-    use std::{thread::{spawn}};
+    use serial_test::{serial};
+    use std::thread::{spawn};
   
     const ADDR_SPEC: &str = "localhost:3012";
 
@@ -64,6 +65,7 @@ mod tests
     }
 
     #[test]
+    #[serial]
     fn errors() 
     {
         //
@@ -156,6 +158,7 @@ mod tests
     }
 
     #[test]
+    #[serial]
     fn communication() 
     {
         //
@@ -267,6 +270,7 @@ mod tests
     }
 
     #[test]
+    #[serial]
     fn rooms() 
     {
         //
