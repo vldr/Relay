@@ -7,13 +7,13 @@ mod tests
     use tungstenite::{connect, Message};
     use serial_test::{serial};
     use std::thread::{spawn};
-  
-    const ADDR_SPEC: &str = "localhost:3012";
+    use std::sync::{mpsc};
+    use std::net::{SocketAddr};
 
     macro_rules! create_socket {
-        () => {
+        ($value:expr) => {
             {
-                let (socket, _) = connect(format!("ws://{}", ADDR_SPEC)).unwrap();
+                let (socket, _) = connect(format!("ws://{}", $value)).unwrap();
                 socket
             }
         };
@@ -48,9 +48,11 @@ mod tests
         };
     }
 
-    fn setup()
+    fn setup() -> SocketAddr
     {
-        spawn(|| {
+        let (tx, rx) = mpsc::channel();
+
+        spawn(move || {
             let relay = Server::new();
             let ws = Builder::new()
                 .with_settings(Settings {
@@ -58,10 +60,15 @@ mod tests
                     ..Settings::default()
                 })
                 .build(|sender| Client::new(relay.clone(), sender))
-                .expect("Failed to build test WebSocket server.");
+                .expect("Failed to build test WebSocket server.")
+                .bind("127.0.0.1:0")
+                .expect("Failed to bind test WebSocket server.");
 
-            ws.listen(ADDR_SPEC).expect("Failed to start test WebSocket server.");
-        });   
+            tx.send(ws.local_addr().unwrap()).unwrap();
+            ws.run().unwrap();
+        }); 
+
+        return rx.recv().unwrap()
     }
 
     #[test]
@@ -72,13 +79,13 @@ mod tests
         // Setup test.
         //
 
-        setup();
+        let socket_addr = setup();
 
         //
         // Test sending an invalid packet
         //
 
-        let mut host_socket = create_socket!();
+        let mut host_socket = create_socket!(socket_addr);
         
         write_message!(host_socket, String::new());
         read_message!(host_socket, TransmitPacket::Error { message } => assert_eq!("The following packet is invalid: \"\"", message));
@@ -116,7 +123,7 @@ mod tests
         // Test joining an non-existant room.
         //
         
-        let mut client_socket = create_socket!();
+        let mut client_socket = create_socket!(socket_addr);
         
         write_message!(client_socket, ReceivePacket::JoinRoom { id: String::new() });
         read_message!(client_socket, TransmitPacket::Error { message } => assert_eq!("The room '' does not exist.", message));
@@ -151,7 +158,7 @@ mod tests
         // Test joining a full room.
         //
 
-        let mut client_socket_2 = create_socket!();
+        let mut client_socket_2 = create_socket!(socket_addr);
         
         write_message!(client_socket_2, ReceivePacket::JoinRoom { id: room_id.clone() });
         read_message!(client_socket_2, TransmitPacket::Error { message } => assert_eq!("The room is full.", message));  
@@ -171,13 +178,13 @@ mod tests
         // Setup test.
         //
 
-        setup();
+        let socket_addr = setup();
 
         //
         // Create a room of size N.
         //
 
-        let mut host_socket = create_socket!();
+        let mut host_socket = create_socket!(socket_addr);
 
         write_message!(host_socket, ReceivePacket::CreateRoom { size: Some(N) } );
         let room_id = read_message!(host_socket, TransmitPacket::CreateRoom { id } => id);
@@ -189,7 +196,7 @@ mod tests
         let mut client_sockets = vec![];
         for _ in 0..N - 1
         {
-            let mut client_socket = create_socket!();
+            let mut client_socket = create_socket!(socket_addr);
 
             write_message!(client_socket, ReceivePacket::JoinRoom { id: room_id.clone() } );
 
@@ -277,7 +284,7 @@ mod tests
         // Setup test.
         //
 
-        setup();
+        let socket_addr = setup();
 
         for stage in ["client_close", "host_close", "client_leave_packet", "host_leave_packet"] 
         {
@@ -285,7 +292,7 @@ mod tests
             // Test creating a valid room.
             // 
             
-            let mut host_socket = create_socket!();
+            let mut host_socket = create_socket!(socket_addr);
             write_message!(host_socket, ReceivePacket::CreateRoom { size: None });
 
             let room_id = read_message!(host_socket, TransmitPacket::CreateRoom { id } => id);
@@ -294,7 +301,7 @@ mod tests
             // Test joining the room as a client.
             //
 
-            let mut client_socket = create_socket!();
+            let mut client_socket = create_socket!(socket_addr);
 
             write_message!(client_socket, ReceivePacket::JoinRoom { id: room_id.clone() });
 
