@@ -7,7 +7,7 @@ mod tests
     use tungstenite::{connect, Message};
     use std::thread::{spawn};
   
-    const ADDR_SPEC: &str = "127.0.0.1:3012";
+    const ADDR_SPEC: &str = "localhost:3012";
 
     macro_rules! create_socket {
         () => {
