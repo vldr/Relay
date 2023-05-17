@@ -18,57 +18,33 @@ mod tests
         };
     }
 
+    macro_rules! write_binary_message {
+        ($value:expr, $value2:expr) => {
+            $value.write_message(Message::Binary($value2)).unwrap()
+        };
+    }
+
     macro_rules! write_message {
         ($value:expr, $value2:expr) => {
-            $value.write_message(Message::from_receive_packet($value2)).unwrap()
+            let packet = $value2;
+            let serialized_packet = serde_json::to_string(&packet).unwrap();
+            $value.write_message(Message::Text(serialized_packet)).unwrap()
         };
     }
 
     macro_rules! read_message {
         ($value:expr, $pattern:pat => $extracted_value:expr) => {
-            match $value.read_message().unwrap().into_transmit_packet() {
+            match serde_json::from_str(&$value.read_message().unwrap().clone().into_text().unwrap()).unwrap() {
                 $pattern => $extracted_value,
                 _ => panic!("pattern doesn't match!"),
             }
         };
     }
-    
-    trait PacketMessage 
-    {
-        fn from_transmit_packet(packet: TransmitPacket) -> Message;
-        fn from_receive_packet(packet: ReceivePacket) -> Message;
 
-        fn into_transmit_packet(&self) -> TransmitPacket;
-        fn into_receive_packet(&self) -> ReceivePacket;
-    }
-
-    impl PacketMessage for Message 
-    {
-        fn from_transmit_packet(packet: TransmitPacket) -> Message
-        {
-            let serialized_packet = serde_json::to_string(&packet).unwrap();
-
-            Message::Text(serialized_packet)
-        }
-
-        fn from_receive_packet( packet: ReceivePacket) -> Message
-        {
-            let serialized_packet = serde_json::to_string(&packet).unwrap();
-
-            Message::Text(serialized_packet)
-        }
-
-        fn into_transmit_packet(&self) -> TransmitPacket
-        {
-            let text = self.clone().into_text().unwrap();
-            serde_json::from_str(&text).unwrap()
-        }
-
-        fn into_receive_packet(&self) -> ReceivePacket
-        {
-            let text = self.clone().into_text().unwrap();
-            serde_json::from_str(&text).unwrap()
-        }
+    macro_rules! read_binary_message {
+        ($value:expr) => {
+            $value.read_message().unwrap().clone().into_data()
+        };
     }
 
     fn setup()
@@ -94,17 +70,31 @@ mod tests
         setup();
 
         //
-        // Test creating an invalid room.
+        // Test sending an invalid packet
         //
 
         let mut host_socket = create_socket!();
+        
+        write_message!(host_socket, String::new());
+        read_message!(host_socket, TransmitPacket::Error { message } => assert_eq!("The following packet is invalid: \"\"", message));
+
+        //
+        // Test sending a binary packet while not in a room.
+        //
+
+        write_binary_message!(host_socket, vec![]);
+        read_message!(host_socket, TransmitPacket::Error { message } => assert_eq!("You're not currently in a room.", message));
+        
+        //
+        // Test creating an invalid room.
+        //
 
         write_message!(host_socket, ReceivePacket::CreateRoom { size: Some(0) });
         read_message!(host_socket, TransmitPacket::Error { message } => assert_eq!("You cannot create an empty room.", message));
 
         //
         // Test creating a valid room.
-        // 
+        //  
 
         write_message!(host_socket, ReceivePacket::CreateRoom { size: None });
 
@@ -118,10 +108,17 @@ mod tests
         read_message!(host_socket, TransmitPacket::Error { message } => assert_eq!("You're already in a room.", message));
 
         //
+        // Test joining an non-existant room.
+        //
+        
+        let mut client_socket = create_socket!();
+        
+        write_message!(client_socket, ReceivePacket::JoinRoom { id: String::new() });
+        read_message!(client_socket, TransmitPacket::Error { message } => assert_eq!("The room '' does not exist.", message));
+
+        //
         // Test joining the room as a client.
         //
-
-        let mut client_socket = create_socket!();
 
         write_message!(client_socket, ReceivePacket::JoinRoom { id: room_id.clone() });
 
@@ -139,8 +136,21 @@ mod tests
         // Test creating a room while in a room.
         // 
 
+        write_message!(host_socket, ReceivePacket::CreateRoom { size: None });
+        read_message!(host_socket, TransmitPacket::Error { message } => assert_eq!("You're currently in a room.", message));
+
         write_message!(client_socket, ReceivePacket::CreateRoom { size: None });
         read_message!(client_socket, TransmitPacket::Error { message } => assert_eq!("You're currently in a room.", message));
+
+        //
+        // Test joining a full room.
+        //
+
+        let mut client_socket_2 = create_socket!();
+        
+        write_message!(client_socket_2, ReceivePacket::JoinRoom { id: room_id.clone() });
+        read_message!(client_socket_2, TransmitPacket::Error { message } => assert_eq!("The room is full.", message));
+
     }
 
     #[test]

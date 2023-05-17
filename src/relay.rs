@@ -1,13 +1,7 @@
-use std::{collections::HashMap, rc::{Rc}, cell::{UnsafeCell}};
+use std::{collections::HashMap, rc::{Rc}, cell::{RefCell}};
 use ws::{Handler, Message, Result, Sender};
 use serde::{Deserialize, Serialize};
 use uuid::{Uuid};
-
-macro_rules! get_server {
-    ($self:expr) => {
-        unsafe { &mut *$self.server.get() }
-    };
-}
 
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -76,10 +70,10 @@ pub struct Server
 
 impl Server 
 {
-    pub fn new() -> Rc<UnsafeCell<Server>>
+    pub fn new() -> Rc<RefCell<Server>>
     {
         Rc::new(
-            UnsafeCell::new(
+            RefCell::new(
                 Server{
                     rooms: HashMap::new(),
                     hosts: HashMap::new(),
@@ -98,7 +92,7 @@ pub struct SenderTuple {
 #[derive(Clone)]
 pub struct Client 
 {
-    server: Rc<UnsafeCell<Server>>,
+    server: Rc<RefCell<Server>>,
 
     sender: Sender,
     room_id: Option<String>
@@ -108,14 +102,14 @@ impl Client
 {
     const DEFAULT_ROOM_SIZE: u8 = 2;
 
-    pub fn new(server: Rc<UnsafeCell<Server>>, sender: Sender) -> Client
+    pub fn new(server: Rc<RefCell<Server>>, sender: Sender) -> Client
     {
         Client { server, sender, room_id: None }
     }
 
     fn handle_create_room(&mut self, size_option: Option<u8>) -> Result<()>
     {
-        let server = get_server!(self);
+        let mut server = self.server.borrow_mut();
 
         let size = size_option.unwrap_or(Self::DEFAULT_ROOM_SIZE);
         if size == 0 
@@ -141,7 +135,7 @@ impl Client
 
     fn handle_join_room(&self, id: String) -> Result<()>
     {
-        let server = get_server!(self);
+        let mut server = self.server.borrow_mut();
 
         if server.rooms.iter().any(|(_, room)| room.senders.iter().any(|sender| *sender == self.sender)) 
         {
@@ -173,7 +167,7 @@ impl Client
 
     fn handle_leave_room(&mut self) -> Result<()> 
     {
-        let server = get_server!(self);
+        let mut server = self.server.borrow_mut();
 
         if let Some(sender_tuple) = server.hosts.remove(&self.sender) 
         {
@@ -251,7 +245,7 @@ impl Handler for Client
         }
         else if message.is_binary()
         {
-            let server = get_server!(self);
+            let server = self.server.borrow();
 
             if let Some(sender_tuple) = server.hosts.get(&self.sender) 
             {
