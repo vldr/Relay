@@ -58,12 +58,13 @@ mod tests
                     max_connections: 256,
                     ..Settings::default()
                 })
-                .build(|sender| Client::new(relay.clone(), sender))
+                .build(|sender| Client::new(&relay, sender))
                 .expect("Failed to build test WebSocket server.")
                 .bind("127.0.0.1:0")
                 .expect("Failed to bind test WebSocket server.");
 
             tx.send(ws.local_addr().unwrap()).unwrap();
+            
             ws.run().expect("Failed to start test WebSocket server.");
         }); 
 
@@ -191,7 +192,7 @@ mod tests
         //
 
         let mut client_sockets = vec![];
-        for _ in 0..N - 1
+        for _ in 0 .. N - 1
         {
             let mut client_socket = create_socket!(socket_addr);
 
@@ -357,5 +358,4 @@ mod tests
             }
         }
     }
-
 }

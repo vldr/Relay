@@ -1,4 +1,4 @@
-use std::{collections::HashMap, rc::{Rc}, cell::{RefCell}};
+use std::{collections::HashMap, cell::{RefCell}};
 use ws::{Handler, Message, Result, Sender};
 use serde::{Deserialize, Serialize};
 use uuid::{Uuid};
@@ -70,15 +70,13 @@ pub struct Server
 
 impl Server 
 {
-    pub fn new() -> Rc<RefCell<Server>>
+    pub fn new() -> RefCell<Server>
     {
-        Rc::new(
-            RefCell::new(
-                Server{
-                    rooms: HashMap::new(),
-                    hosts: HashMap::new(),
-                }
-            )
+        RefCell::new(
+            Server{
+                rooms: HashMap::new(),
+                hosts: HashMap::new(),
+            }
         )
     }
 }
@@ -90,19 +88,19 @@ pub struct SenderTuple {
 }
 
 #[derive(Clone)]
-pub struct Client 
+pub struct Client<'server>
 {
-    server: Rc<RefCell<Server>>,
+    server: &'server RefCell<Server>,
 
     sender: Sender,
     room_id: Option<String>
 }
 
-impl Client
+impl<'server> Client<'server>
 {
     const DEFAULT_ROOM_SIZE: u8 = 2;
 
-    pub fn new(server: Rc<RefCell<Server>>, sender: Sender) -> Client
+    pub fn new(server: &'server RefCell<Server>, sender: Sender) -> Client<'server>
     {
         Client { server, sender, room_id: None }
     }
@@ -208,7 +206,7 @@ impl Client
     } 
 }
 
-impl Handler for Client
+impl<'server> Handler for Client<'server>
 {
     fn on_close(&mut self, _: ws::CloseCode, _: &str) 
     {

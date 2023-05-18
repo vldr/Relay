@@ -9,10 +9,12 @@ fn main()
     let ws = Builder::new()
         .with_settings(Settings {
             max_connections: 10000,
+            tcp_nodelay: true,
             ..Settings::default()
         })
-        .build(|sender| relay::Client::new(server.clone(), sender))
+        .build(|sender| relay::Client::new(&server, sender))
         .expect("Failed to build WebSocket server.");
 
-    ws.listen("0.0.0.0:1234").expect("Failed to start WebSocket server.");
+    ws.listen("0.0.0.0:1234")
+      .expect("Failed to start WebSocket server.");
 }
