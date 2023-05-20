@@ -5,7 +5,7 @@ mod tests
 
     use ws::{Builder, Settings};
     use std::net::{SocketAddr};
-    use tungstenite::{connect, Message};
+    use tungstenite::{Message, connect};
     use std::thread::{spawn};
     use std::sync::{mpsc};
 
@@ -55,7 +55,7 @@ mod tests
             let relay = Server::new();
             let ws = Builder::new()
                 .with_settings(Settings {
-                    max_connections: 256,
+                    max_connections: usize::from(u8::MAX),
                     ..Settings::default()
                 })
                 .build(|sender| Client::new(&relay, sender))
@@ -79,98 +79,99 @@ mod tests
         //
 
         let socket_addr = setup();
-
-        //
-        // Test sending an invalid packet
-        //
-
-        let mut host_socket = create_socket!(socket_addr);
-        
-        write_message!(host_socket, String::new());
-        read_message!(host_socket, TransmitPacket::Error { message } => assert_eq!("The following packet is invalid: \"\"", message));
-
-        //
-        // Test sending a binary packet while not in a room.
-        //
-
-        write_binary_message!(host_socket, vec![]);
-        read_message!(host_socket, TransmitPacket::Error { message } => assert_eq!("You're not currently in a room.", message));
         
         //
         // Test creating an invalid room.
         //
 
-        write_message!(host_socket, ReceivePacket::CreateRoom { size: Some(0) });
-        read_message!(host_socket, TransmitPacket::Error { message } => assert_eq!("You cannot create an empty room.", message));
+        let mut socket = create_socket!(socket_addr);
+
+        write_message!(socket, ReceivePacket::Create { size: Some(0) });
+        read_message!(socket, TransmitPacket::Error { message } => assert_eq!("The room size '0' is not valid", message));
+
+        write_message!(socket, ReceivePacket::Create { size: Some(255) });
+        read_message!(socket, TransmitPacket::Error { message } => assert_eq!("The room size '255' is not valid", message));
 
         //
         // Test creating a valid room.
         //  
 
-        write_message!(host_socket, ReceivePacket::CreateRoom { size: None });
+        write_message!(socket, ReceivePacket::Create { size: None });
 
-        let room_id = read_message!(host_socket, TransmitPacket::CreateRoom { id } => id);
-
-        //
-        // Test joining another room as host.
-        //
-
-        write_message!(host_socket, ReceivePacket::JoinRoom { id: String::new() });
-        read_message!(host_socket, TransmitPacket::Error { message } => assert_eq!("You're already in a room.", message));
+        let room_id = read_message!(socket, TransmitPacket::Create { id } => id);
 
         //
-        // Test joining an non-existant room.
+        // Test joining another room while inside a room.
+        //
+
+        write_message!(socket, ReceivePacket::Join { id: String::new() });
+        read_message!(socket, TransmitPacket::Error { message } => assert_eq!("You're already in a room.", message));
+
+        //
+        // Test joining an non-existent room.
         //
         
-        let mut client_socket = create_socket!(socket_addr);
+        let mut socket_2 = create_socket!(socket_addr);
         
-        write_message!(client_socket, ReceivePacket::JoinRoom { id: String::new() });
-        read_message!(client_socket, TransmitPacket::Error { message } => assert_eq!("The room '' does not exist.", message));
+        write_message!(socket_2, ReceivePacket::Join { id: String::new() });
+        read_message!(socket_2, TransmitPacket::Error { message } => assert_eq!("The room '' does not exist.", message));
 
         //
-        // Test joining the room as a client.
+        // Test joining the room.
         //
 
-        write_message!(client_socket, ReceivePacket::JoinRoom { id: room_id.clone() });
+        write_message!(socket_2, ReceivePacket::Join { id: room_id.clone() });
 
-        read_message!(client_socket, TransmitPacket::JoinRoom => ());
-        read_message!(host_socket, TransmitPacket::JoinRoom => ());
+        read_message!(socket_2, TransmitPacket::Join { size } => assert_eq!(1, size));
+        read_message!(socket, TransmitPacket::Join { size } => assert_eq!(1, size));
 
         //
         // Test joining another room as a client.
         //
 
-        write_message!(client_socket, ReceivePacket::JoinRoom { id: String::new() });
-        read_message!(client_socket, TransmitPacket::Error { message } => assert_eq!("You're already in a room.", message));
+        write_message!(socket_2, ReceivePacket::Join { id: String::new() });
+        read_message!(socket_2, TransmitPacket::Error { message } => assert_eq!("You're already in a room.", message));
 
         //
         // Test creating a room while in a room.
         // 
 
-        write_message!(host_socket, ReceivePacket::CreateRoom { size: None });
-        read_message!(host_socket, TransmitPacket::Error { message } => assert_eq!("You're currently in a room.", message));
+        write_message!(socket, ReceivePacket::Create { size: None });
+        read_message!(socket, TransmitPacket::Error { message } => assert_eq!("You're currently in a room.", message));
 
-        write_message!(client_socket, ReceivePacket::CreateRoom { size: None });
-        read_message!(client_socket, TransmitPacket::Error { message } => assert_eq!("You're currently in a room.", message));
+        write_message!(socket_2, ReceivePacket::Create { size: None });
+        read_message!(socket_2, TransmitPacket::Error { message } => assert_eq!("You're currently in a room.", message));
 
         //
         // Test joining a full room.
         //
 
-        let mut client_socket_2 = create_socket!(socket_addr);
+        let mut socket_3 = create_socket!(socket_addr);
         
-        write_message!(client_socket_2, ReceivePacket::JoinRoom { id: room_id.clone() });
-        read_message!(client_socket_2, TransmitPacket::Error { message } => assert_eq!("The room is full.", message));  
+        write_message!(socket_3, ReceivePacket::Join { id: room_id.clone() });
+        read_message!(socket_3, TransmitPacket::Error { message } => assert_eq!("The room is full.", message));
+
+        //
+        // Test joining a removed room.
+        //
+        
+        socket.close(None).unwrap();
+        socket_2.close(None).unwrap();
+
+        write_message!(socket_3, ReceivePacket::Join { id: room_id.clone() });
+        read_message!(socket_3, TransmitPacket::Error { message } => assert_eq!(format!("The room '{}' does not exist.", room_id), message));
+
+        socket_3.close(None).unwrap();
     }
 
     #[test]
     fn communication() 
     {
         //
-        // The number of clients to test with.
+        // The maximum number of clients to test.
         //
 
-        const N: u8 = 255;
+        const N: u8 = u8::MAX - 1;
 
         //
         // Setup test.
@@ -179,183 +180,209 @@ mod tests
         let socket_addr = setup();
 
         //
-        // Create a room of size N.
+        // Create N clients, the first client creates a room, the rest join the room.
         //
 
-        let mut host_socket = create_socket!(socket_addr);
+        let mut sockets = vec![];
+        let mut room_id = String::new();
 
-        write_message!(host_socket, ReceivePacket::CreateRoom { size: Some(N) } );
-        let room_id = read_message!(host_socket, TransmitPacket::CreateRoom { id } => id);
-
-        //
-        // Create N clients.
-        //
-
-        let mut client_sockets = vec![];
-        for _ in 0 .. N - 1
+        for expected_size in 0..usize::from(N)
         {
-            let mut client_socket = create_socket!(socket_addr);
+            let mut socket = create_socket!(socket_addr);
 
-            write_message!(client_socket, ReceivePacket::JoinRoom { id: room_id.clone() } );
+            if expected_size == 0 
+            {
+                write_message!(socket, ReceivePacket::Create { size: Some(N.into()) });
+                read_message!(socket, TransmitPacket::Create { id } => room_id = id);
 
-            read_message!(host_socket, TransmitPacket::JoinRoom => ());
-            read_message!(client_socket, TransmitPacket::JoinRoom => ());
+                sockets.push(socket);
+            }
+            else 
+            {
+                write_message!(socket, ReceivePacket::Join { id: room_id.clone() } );
 
-            client_sockets.push(client_socket);
-        }       
+                sockets.push(socket);
+
+                for socket in sockets.iter_mut()
+                {
+                    read_message!(socket, TransmitPacket::Join { size } => assert_eq!(expected_size, size));
+                }
+            }
+        }   
         
         //
         // Test room bounds.
         //
 
-        let mut client_socket = create_socket!(socket_addr);
+        let mut socket = create_socket!(socket_addr);
 
-        write_message!(client_socket, ReceivePacket::JoinRoom { id: room_id.clone() } );
-        read_message!(client_socket, TransmitPacket::Error { message } => assert_eq!("The room is full.", message));  
+        write_message!(socket, ReceivePacket::Join { id: room_id.clone() } );
+        read_message!(socket, TransmitPacket::Error { message } => assert_eq!("The room is full.", message));  
 
-        client_socket.close(None).unwrap();
+        socket.close(None).unwrap();
 
         //
         // Test broadcasting.
         //
 
-        write_binary_message!(host_socket, vec![0]);
-        write_binary_message!(host_socket, vec![0, 1, 2]);
-
-        for client_socket in client_sockets.iter_mut()
+        for expected_source in 0..N
         {
-            let data = read_binary_message!(client_socket);
-            assert_eq!(data.len(), 0);
+            let source_socket = &mut sockets[usize::from(expected_source)];
 
-            let data = read_binary_message!(client_socket);
-            assert_eq!(data.len(), 2);
-            assert_eq!(data[0], 1);
-            assert_eq!(data[1], 2);
-        }
+            write_binary_message!(source_socket, vec![ u8::MAX ]);
+            write_binary_message!(source_socket, vec![ u8::MAX, 0, 1, 2, 3 ]);
+
+            for expected_destination in 0..N
+            {
+                if expected_destination == expected_source 
+                {
+                    continue;
+                }
+
+                let destination_socket = &mut sockets[usize::from(expected_destination)];
+
+                assert_eq!(vec![ expected_source ], read_binary_message!(destination_socket));
+                assert_eq!(vec![ expected_source, 0, 1, 2, 3 ], read_binary_message!(destination_socket));
+            } 
+        }  
 
         //
-        // Test sending to clients.
+        // Test sending to each other.
         //
 
-        for (index, client_socket) in client_sockets.iter_mut().enumerate()
+        for expected_source in 0..N
         {
-            write_binary_message!(host_socket, vec![index.try_into().unwrap()]);
-            write_binary_message!(host_socket, vec![index.try_into().unwrap(), 1, 2]);
+            for expected_destination in 0..N
+            {
+                let source_socket = &mut sockets[usize::from(expected_source)];
 
-            let data = read_binary_message!(client_socket);
-            assert_eq!(data.len(), 0);
+                write_binary_message!(source_socket, vec![ expected_destination ]);
+                write_binary_message!(source_socket, vec![ expected_destination, 0, 1, 2, 3 ]);
 
-            let data = read_binary_message!(client_socket);
-            assert_eq!(data.len(), 2);
-            assert_eq!(data[0], 1);
-            assert_eq!(data[1], 2);
-        }
+                let destination_socket = &mut sockets[usize::from(expected_destination)];
 
-        //
-        // Test sending to host.
-        //
-
-        for (index, client_socket) in client_sockets.iter_mut().enumerate()
-        {
-            write_binary_message!(client_socket, vec![]);
-            write_binary_message!(client_socket, vec![1, 2]);
-
-            let data = read_binary_message!(host_socket);
-            assert_eq!(data.len(), 1);
-            assert_eq!(data[0], <usize as TryInto<u8>>::try_into(index + 1).unwrap());
-
-            let data = read_binary_message!(host_socket);
-            assert_eq!(data.len(), 3);
-            assert_eq!(data[0], <usize as TryInto<u8>>::try_into(index + 1).unwrap());
-            assert_eq!(data[1], 1);
-            assert_eq!(data[2], 2);
-        }
+                assert_eq!(vec![ expected_source ], read_binary_message!(destination_socket));
+                assert_eq!(vec![ expected_source, 0, 1, 2, 3 ], read_binary_message!(destination_socket));
+            } 
+        }  
 
         //
         // Close host and N clients.
         //
         
-        let size = client_sockets.len();
-        for (expected_index, client_socket) in client_sockets.iter_mut().rev().enumerate()
+        for _ in 0..N
         {
-            client_socket.close(None).unwrap();
-            read_message!(host_socket, TransmitPacket::LeaveRoom { index } => assert_eq!(size - expected_index, index));
+            sockets.remove(0).close(None).unwrap();
+
+            for socket in &mut sockets
+            {
+                read_message!(socket, TransmitPacket::Leave { index } => assert_eq!(0, index));
+            }
         }
 
-        host_socket.close(None).unwrap();
+        //
+        // Test if room was removed.
+        //
+
+        let mut socket = create_socket!(socket_addr);
+
+        write_message!(socket, ReceivePacket::Join { id: room_id.clone() } );
+        read_message!(socket, TransmitPacket::Error { message } => assert_eq!(format!("The room '{}' does not exist.", room_id), message));  
+
+        socket.close(None).unwrap();
     }
 
     #[test]
-    fn rooms() 
-    {
+    fn indices() 
+    { 
+        //
+        // The maximum number of clients to test.
+        //
+
+        const N: u8 = u8::MAX - 1;
+
         //
         // Setup test.
         //
 
         let socket_addr = setup();
 
-        for stage in ["client_close", "host_close", "client_leave_packet", "host_leave_packet"] 
+        //
+        // Perform the test by either closing the connection or leaving the room.
+        //
+
+        for method in ["close", "leave"] 
         {
-            //
-            // Test creating a valid room.
-            // 
-            
-            let mut host_socket = create_socket!(socket_addr);
-            write_message!(host_socket, ReceivePacket::CreateRoom { size: None });
+            for direction in ["first", "last"] 
+            {
+                //
+                // Create N clients, the first client creates a room, the rest join the room.
+                //
 
-            let room_id = read_message!(host_socket, TransmitPacket::CreateRoom { id } => id);
+                let mut sockets = vec![];
+                let mut room_id = String::new();
 
-            //
-            // Test joining the room as a client.
-            //
-
-            let mut client_socket = create_socket!(socket_addr);
-
-            write_message!(client_socket, ReceivePacket::JoinRoom { id: room_id.clone() });
-
-            read_message!(client_socket, TransmitPacket::JoinRoom => ());
-            read_message!(host_socket, TransmitPacket::JoinRoom => ());
-
-            //
-            // Test leaving room.
-            //
-            
-            match stage {
-                "client_close" => 
-                {   
-                    client_socket.close(None).unwrap();
-                    read_message!(host_socket, TransmitPacket::LeaveRoom { index } => assert_eq!(1, index));
-
-                },
-                "host_close" => 
+                for expected_size in 0..usize::from(N)
                 {
-                    host_socket.close(None).unwrap();
-                    read_message!(client_socket, TransmitPacket::Kick { message } => assert_eq!("The host has left the room.", message));
+                    let mut socket = create_socket!(socket_addr);
 
-                    write_message!(client_socket, ReceivePacket::JoinRoom { id: room_id.clone() });
-                    read_message!(client_socket, TransmitPacket::Error { message } => assert_eq!(format!("The room '{}' does not exist.", room_id.clone()), message));
+                    if expected_size == 0 
+                    {
+                        write_message!(socket, ReceivePacket::Create { size: Some(N.into()) });
+                        read_message!(socket, TransmitPacket::Create { id } => room_id = id);
 
-                    write_message!(client_socket, ReceivePacket::CreateRoom { size: None });
-                    read_message!(client_socket, TransmitPacket::CreateRoom { id } => id);
-                },
-                "client_leave_packet" => 
+                        sockets.push(socket);
+                    }
+                    else 
+                    {
+                        write_message!(socket, ReceivePacket::Join { id: room_id.clone() } );
+
+                        sockets.push(socket);
+
+                        for socket in sockets.iter_mut()
+                        {
+                            read_message!(socket, TransmitPacket::Join { size } => assert_eq!(expected_size, size));
+                        }
+                    }
+                } 
+
+                //
+                // Test leave room indices.
+                //
+
+                for mut expected_index in (0..usize::from(N)).rev()
                 {
-                    write_message!(client_socket, ReceivePacket::LeaveRoom);
-                    read_message!(host_socket, TransmitPacket::LeaveRoom { index } => assert_eq!(1, index));
-                },
-                "host_leave_packet" => 
-                {
-                    write_message!(host_socket, ReceivePacket::LeaveRoom);
-                    read_message!(client_socket, TransmitPacket::Kick { message } => assert_eq!("The host has left the room.", message));
+                    let mut socket = if direction == "last" { 
+                        sockets.pop().unwrap()
+                    } else {
+                        sockets.remove(0)
+                    };
 
-                    write_message!(client_socket, ReceivePacket::JoinRoom { id: room_id.clone() });
-                    read_message!(client_socket, TransmitPacket::Error { message } => assert_eq!(format!("The room '{}' does not exist.", room_id.clone()), message));
+                    if direction == "first" 
+                    {
+                        expected_index = 0;
+                    }
 
-                    write_message!(client_socket, ReceivePacket::CreateRoom { size: None });
-                    read_message!(client_socket, TransmitPacket::CreateRoom { id } => id);
-                },
-                _ => panic!("invalid stage {}", stage),
-            }
-        }
+                    if method == "leave"
+                    {
+                        write_message!(socket, ReceivePacket::Leave);
+                    }
+                    else if method == "close"
+                    {
+                        socket.close(None).unwrap();
+                    }
+
+                    for socket in &mut sockets
+                    {
+                        read_message!(socket, TransmitPacket::Leave { index } => assert_eq!(expected_index, index));
+                    }
+
+                    if method == "leave"
+                    {
+                        socket.close(None).unwrap();
+                    }
+                }
+            } 
+        }         
     }
 }

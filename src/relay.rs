@@ -4,21 +4,19 @@ use serde::{Deserialize, Serialize};
 use uuid::{Uuid};
 
 #[derive(Debug, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[serde(tag = "type", rename_all = "camelCase")]
 pub enum ReceivePacket {
-    CreateRoom { size: Option<u8> },
-    JoinRoom { id: String },
-    LeaveRoom,
+    Join { id: String },
+    Create { size: Option<usize> },
+    Leave,
 } 
 
 #[derive(Debug, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[serde(tag = "type", rename_all = "camelCase")]
 pub enum TransmitPacket {
-    CreateRoom { id: String },
-    LeaveRoom { index: usize },
-    JoinRoom,
-
-    Kick { message: String },
+    Create { id: String },
+    Join { size: usize },
+    Leave { index: usize },
     Error { message: String },
 }
 
@@ -47,13 +45,17 @@ impl PacketSender for Sender
 
 struct Room 
 {
-    size: u8,
+    size: usize,
     senders: Vec<Sender>,
 }
 
 impl Room 
 {
-    fn new(size: u8) -> Room
+    const MIN_ROOM_SIZE: usize = 0;
+    const MAX_ROOM_SIZE: usize = 255;
+    const DEFAULT_ROOM_SIZE: usize = 2;
+
+    fn new(size: usize) -> Room
     {
         Room {
             senders: Vec::new(),
@@ -65,7 +67,6 @@ impl Room
 pub struct Server 
 {
     rooms: HashMap<String, Room>,
-    hosts: HashMap<Sender, SenderTuple>,
 }
 
 impl Server 
@@ -75,49 +76,39 @@ impl Server
         RefCell::new(
             Server{
                 rooms: HashMap::new(),
-                hosts: HashMap::new(),
             }
         )
     }
 }
 
-#[derive(Clone)]
-pub struct SenderTuple {
-    index: usize,
-    host: Sender
-}
-
-#[derive(Clone)]
 pub struct Client<'server>
 {
     server: &'server RefCell<Server>,
-
     sender: Sender,
+
     room_id: Option<String>
 }
 
 impl<'server> Client<'server>
 {
-    const DEFAULT_ROOM_SIZE: u8 = 2;
-
     pub fn new(server: &'server RefCell<Server>, sender: Sender) -> Client<'server>
     {
         Client { server, sender, room_id: None }
     }
 
-    fn handle_create_room(&mut self, size_option: Option<u8>) -> Result<()>
+    fn handle_create_room(&mut self, size_option: Option<usize>) -> Result<()>
     {
         let mut server = self.server.borrow_mut();
 
-        let size = size_option.unwrap_or(Self::DEFAULT_ROOM_SIZE);
-        if size == 0 
+        let size = size_option.unwrap_or(Room::DEFAULT_ROOM_SIZE);
+        if size == Room::MIN_ROOM_SIZE || size >= Room::MAX_ROOM_SIZE
         {
-            return self.sender.send_error_packet(format!("You cannot create an empty room."));
+            return self.sender.send_error_packet(format!("The room size '{}' is not valid", size));
         }
 
         if server.rooms.iter().any(|(_, room)| room.senders.iter().any(|sender| *sender == self.sender)) 
         {
-            return self.sender.send_error_packet(format!("You're currently in a room."));
+            return self.sender.send_error_packet("You're currently in a room.".to_string());
         }
 
         let room_id = Uuid::new_v4().to_string();
@@ -125,84 +116,72 @@ impl<'server> Client<'server>
 
         let mut room = Room::new(size);
         room.senders.push(self.sender.clone());
-        
         server.rooms.insert(room_id.clone(), room);
         
-        return self.sender.send_packet(TransmitPacket::CreateRoom { id: room_id.clone() });
+        self.sender.send_packet(TransmitPacket::Create { id: room_id })
     }
 
-    fn handle_join_room(&self, id: String) -> Result<()>
+    fn handle_join_room(&mut self, room_id: String) -> Result<()>
     {
         let mut server = self.server.borrow_mut();
 
         if server.rooms.iter().any(|(_, room)| room.senders.iter().any(|sender| *sender == self.sender)) 
         {
-            return self.sender.send_error_packet(format!("You're already in a room."));
+            return self.sender.send_error_packet("You're already in a room.".to_string());
         }
 
-        if let Some(room) = server.rooms.get_mut(&id)
+        if let Some(room) = server.rooms.get_mut(&room_id)
         {
-            if room.senders.len() >= room.size.into()
+            if room.senders.len() >= room.size
             {
-                return self.sender.send_error_packet(format!("The room is full."));
+                return self.sender.send_error_packet("The room is full.".to_string());
             }
-            
+
             room.senders.push(self.sender.clone());
-            room.senders[0].send_packet(TransmitPacket::JoinRoom)?;
 
-            let sender_tuple = SenderTuple { 
-                host: room.senders[0].clone(), 
-                index: room.senders.len() - 1,
-            };
+            for sender in &room.senders 
+            {
+                sender.send_packet(TransmitPacket::Join { size: room.senders.len() - 1 })?;
+            }
 
-            server.hosts.insert(self.sender.clone(), sender_tuple);
-
-            return self.sender.send_packet(TransmitPacket::JoinRoom);
+            self.room_id = Some(room_id);
+        }
+        else 
+        {
+            return self.sender.send_error_packet(format!("The room '{}' does not exist.", room_id)); 
         }
         
-        return self.sender.send_error_packet(format!("The room '{}' does not exist.", id));  
+        Ok(())
     }
 
     fn handle_leave_room(&mut self) -> Result<()> 
     {
         let mut server = self.server.borrow_mut();
 
-        if let Some(sender_tuple) = server.hosts.remove(&self.sender) 
+        if let Some(room_id) = &self.room_id
         {
-            for (_, room) in &mut server.rooms 
+            if let Some(room) = server.rooms.get_mut(room_id)
             {
-                for (index, sender) in room.senders.iter().enumerate()
+                if let Some(index) = room.senders.iter().position(|sender| *sender == self.sender)
                 {
-                    if *sender == self.sender 
-                    {
-                        room.senders.remove(index);
+                    room.senders.remove(index);
 
-                        return sender_tuple.host.send_packet(TransmitPacket::LeaveRoom { index });
+                    for sender in &room.senders
+                    {
+                        sender.send_packet(TransmitPacket::Leave { index })?;
                     }
                 }
-            }
-        }
-        else if let Some(room_id) = self.room_id.clone()
-        {
-            if let Some(room) = server.rooms.remove(&room_id)
-            {
-                for sender in room.senders 
+
+                if room.senders.is_empty()
                 {
-                    if sender == self.sender 
-                    {
-                        continue;
-                    }
-
-                    server.hosts.remove(&sender);
-
-                    sender.send_packet(TransmitPacket::Kick { message: format!("The host has left the room.") })?;
+                    server.rooms.remove(room_id);
                 }
             }
 
             self.room_id = None;
         }
 
-        return Ok(());
+        Ok(())
     } 
 }
 
@@ -226,14 +205,10 @@ impl<'server> Handler for Client<'server>
                 {
                     match packet 
                     {
-                        ReceivePacket::CreateRoom { size } => self.handle_create_room(size)?,
-                        ReceivePacket::JoinRoom { id } => self.handle_join_room(id)?,
-                        ReceivePacket::LeaveRoom => self.handle_leave_room()?,
+                        ReceivePacket::Create { size } => self.handle_create_room(size)?,
+                        ReceivePacket::Join { id } => self.handle_join_room(id)?,
+                        ReceivePacket::Leave => self.handle_leave_room()?,
                     }
-                }
-                else 
-                {
-                    return self.sender.send_error_packet(format!("The following packet is invalid: {}", text));
                 }
             }
         }
@@ -241,49 +216,45 @@ impl<'server> Handler for Client<'server>
         {
             let server = self.server.borrow();
 
-            if let Some(sender_tuple) = server.hosts.get(&self.sender) 
+            if let Some(room_id) = &self.room_id
             {
-                let mut data = message.into_data();
-                data.insert(0, sender_tuple.index.try_into().unwrap());
-
-                return sender_tuple.host.send(data);  
-            }
-            else if let Some(room_id) = self.room_id.clone()
-            {
-                if let Some(room) = server.rooms.get(&room_id) 
+                if let Some(room) = server.rooms.get(room_id) 
                 {
-                    let data = message.into_data();
-
-                    if data.len() > 0
+                    if let Some(index) = room.senders.iter().position(|sender| *sender == self.sender)
                     {
-                        let index = data[0];
-                        let message = Message::Binary(data[1..].to_vec());
+                        let mut data = message.into_data();
 
-                        if index > 0 && usize::from(index) < room.senders.len()
+                        if !data.is_empty()
                         {
-                            return room.senders[usize::from(index)].send(message);
-                        }
-                        else if index == 0
-                        {
-                            for sender in &room.senders 
-                            {   
-                                if *sender == self.sender 
-                                {
-                                    continue;
-                                }
-        
-                                sender.send(message.clone())?;                            
+                            let source = u8::try_from(index).unwrap();
+                            let destination = usize::from(data[0]);
+                            
+                            data[0] = source;
+
+                            if destination < room.senders.len()
+                            {
+                                return room.senders[destination].send(data);
                             }
+                            else if destination == usize::from(u8::MAX)
+                            {
+                                for sender in &room.senders 
+                                {   
+                                    if *sender == self.sender 
+                                    {
+                                        continue;
+                                    }
+            
+                                    sender.send(data.clone())?;                            
+                                }
 
-                            return Ok(());
+                                return Ok(());
+                            }
                         }
                     }
                 }
             }
-
-            return self.sender.send_error_packet(format!("You're not currently in a room."));
         }
 
-        return Ok(());
+        Ok(())
     } 
 }
