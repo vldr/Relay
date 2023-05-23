@@ -81,16 +81,16 @@ mod tests
         let socket_addr = setup();
         
         //
-        // Test creating an invalid room.
+        // Test creating an invalid sized room.
         //
 
         let mut socket = create_socket!(socket_addr);
 
         write_message!(socket, ReceivePacket::Create { size: Some(0) });
-        read_message!(socket, TransmitPacket::Error { message } => assert_eq!("The room size '0' is not valid", message));
+        read_message!(socket, TransmitPacket::Error { message } => assert_eq!("The room size is not valid", message));
 
         write_message!(socket, ReceivePacket::Create { size: Some(255) });
-        read_message!(socket, TransmitPacket::Error { message } => assert_eq!("The room size '255' is not valid", message));
+        read_message!(socket, TransmitPacket::Error { message } => assert_eq!("The room size is not valid", message));
 
         //
         // Test creating a valid room.
@@ -100,12 +100,6 @@ mod tests
 
         let room_id = read_message!(socket, TransmitPacket::Create { id } => id);
 
-        //
-        // Test joining another room while inside a room.
-        //
-
-        write_message!(socket, ReceivePacket::Join { id: String::new() });
-        read_message!(socket, TransmitPacket::Error { message } => assert_eq!("You're already in a room.", message));
 
         //
         // Test joining an non-existent room.
@@ -114,7 +108,7 @@ mod tests
         let mut socket_2 = create_socket!(socket_addr);
         
         write_message!(socket_2, ReceivePacket::Join { id: String::new() });
-        read_message!(socket_2, TransmitPacket::Error { message } => assert_eq!("The room '' does not exist.", message));
+        read_message!(socket_2, TransmitPacket::Error { message } => assert_eq!("The room does not exist.", message));
 
         //
         // Test joining the room.
@@ -122,25 +116,8 @@ mod tests
 
         write_message!(socket_2, ReceivePacket::Join { id: room_id.clone() });
 
-        read_message!(socket_2, TransmitPacket::Join { size } => assert_eq!(1, size));
-        read_message!(socket, TransmitPacket::Join { size } => assert_eq!(1, size));
-
-        //
-        // Test joining another room as a client.
-        //
-
-        write_message!(socket_2, ReceivePacket::Join { id: String::new() });
-        read_message!(socket_2, TransmitPacket::Error { message } => assert_eq!("You're already in a room.", message));
-
-        //
-        // Test creating a room while in a room.
-        // 
-
-        write_message!(socket, ReceivePacket::Create { size: None });
-        read_message!(socket, TransmitPacket::Error { message } => assert_eq!("You're currently in a room.", message));
-
-        write_message!(socket_2, ReceivePacket::Create { size: None });
-        read_message!(socket_2, TransmitPacket::Error { message } => assert_eq!("You're currently in a room.", message));
+        read_message!(socket_2, TransmitPacket::Join { size } => assert_eq!(Some(1), size));
+        read_message!(socket, TransmitPacket::Join { size } => assert_eq!(None, size));
 
         //
         // Test joining a full room.
@@ -159,7 +136,7 @@ mod tests
         socket_2.close(None).unwrap();
 
         write_message!(socket_3, ReceivePacket::Join { id: room_id.clone() });
-        read_message!(socket_3, TransmitPacket::Error { message } => assert_eq!(format!("The room '{}' does not exist.", room_id), message));
+        read_message!(socket_3, TransmitPacket::Error { message } => assert_eq!("The room does not exist.", message));
 
         socket_3.close(None).unwrap();
     }
@@ -200,12 +177,19 @@ mod tests
             else 
             {
                 write_message!(socket, ReceivePacket::Join { id: room_id.clone() } );
-
                 sockets.push(socket);
 
-                for socket in sockets.iter_mut()
+                let size = sockets.len() - 1;
+                for (index, socket) in sockets.iter_mut().enumerate()
                 {
-                    read_message!(socket, TransmitPacket::Join { size } => assert_eq!(expected_size, size));
+                    if index == size
+                    {
+                        read_message!(socket, TransmitPacket::Join { size } => assert_eq!(Some(expected_size), size));
+                    }
+                    else 
+                    {
+                        read_message!(socket, TransmitPacket::Join { size } => assert_eq!(None, size));
+                    }
                 }
             }
         }   
@@ -287,7 +271,7 @@ mod tests
         let mut socket = create_socket!(socket_addr);
 
         write_message!(socket, ReceivePacket::Join { id: room_id.clone() } );
-        read_message!(socket, TransmitPacket::Error { message } => assert_eq!(format!("The room '{}' does not exist.", room_id), message));  
+        read_message!(socket, TransmitPacket::Error { message } => assert_eq!("The room does not exist.", message));  
 
         socket.close(None).unwrap();
     }
@@ -336,12 +320,19 @@ mod tests
                     else 
                     {
                         write_message!(socket, ReceivePacket::Join { id: room_id.clone() } );
-
                         sockets.push(socket);
 
-                        for socket in sockets.iter_mut()
+                        let size = sockets.len() - 1;
+                        for (index, socket) in sockets.iter_mut().enumerate()
                         {
-                            read_message!(socket, TransmitPacket::Join { size } => assert_eq!(expected_size, size));
+                            if index == size
+                            {
+                                read_message!(socket, TransmitPacket::Join { size } => assert_eq!(Some(expected_size), size));
+                            }
+                            else 
+                            {
+                                read_message!(socket, TransmitPacket::Join { size } => assert_eq!(None, size));
+                            }
                         }
                     }
                 } 

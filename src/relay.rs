@@ -1,5 +1,5 @@
-use std::{collections::HashMap, cell::{RefCell}};
 use ws::{Handler, Message, Result, Sender};
+use std::{collections::{HashMap}, cell::{RefCell}};
 use serde::{Deserialize, Serialize};
 use uuid::{Uuid};
 
@@ -12,10 +12,13 @@ pub enum ReceivePacket {
 } 
 
 #[derive(Debug, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "camelCase")]
+#[serde(tag = "type", rename_all = "camelCase", )]
 pub enum TransmitPacket {
+    Join { 
+        #[serde(skip_serializing_if = "Option::is_none")] 
+        size: Option<usize> 
+    },
     Create { id: String },
-    Join { size: usize },
     Leave { index: usize },
     Error { message: String },
 }
@@ -99,20 +102,25 @@ impl<'server> Client<'server>
     fn handle_create_room(&mut self, size_option: Option<usize>) -> Result<()>
     {
         let mut server = self.server.borrow_mut();
+        
+        if server.rooms.iter().any(|(_, room)| room.senders.iter().any(|sender| *sender == self.sender)) 
+        {
+            return Ok(());
+        }
 
         let size = size_option.unwrap_or(Room::DEFAULT_ROOM_SIZE);
         if size == Room::MIN_ROOM_SIZE || size >= Room::MAX_ROOM_SIZE
         {
-            return self.sender.send_error_packet(format!("The room size '{}' is not valid", size));
-        }
-
-        if server.rooms.iter().any(|(_, room)| room.senders.iter().any(|sender| *sender == self.sender)) 
-        {
-            return self.sender.send_error_packet("You're currently in a room.".to_string());
+            return self.sender.send_error_packet("The room size is not valid".to_string());
         }
 
         let room_id = Uuid::new_v4().to_string();
         self.room_id = Some(room_id.clone());
+
+        if server.rooms.contains_key(&room_id)
+        {
+            return self.sender.send_error_packet("A room with that identifier already exists.".to_string());
+        }
 
         let mut room = Room::new(size);
         room.senders.push(self.sender.clone());
@@ -127,7 +135,7 @@ impl<'server> Client<'server>
 
         if server.rooms.iter().any(|(_, room)| room.senders.iter().any(|sender| *sender == self.sender)) 
         {
-            return self.sender.send_error_packet("You're already in a room.".to_string());
+            return Ok(());
         }
 
         if let Some(room) = server.rooms.get_mut(&room_id)
@@ -141,14 +149,21 @@ impl<'server> Client<'server>
 
             for sender in &room.senders 
             {
-                sender.send_packet(TransmitPacket::Join { size: room.senders.len() - 1 })?;
+                if *sender == self.sender 
+                {
+                    sender.send_packet(TransmitPacket::Join { size: Some(room.senders.len() - 1) })?;
+                }
+                else 
+                {
+                    sender.send_packet(TransmitPacket::Join { size: None })?;
+                }
             }
 
             self.room_id = Some(room_id);
         }
         else 
         {
-            return self.sender.send_error_packet(format!("The room '{}' does not exist.", room_id)); 
+            return self.sender.send_error_packet("The room does not exist.".to_string()); 
         }
         
         Ok(())
@@ -205,9 +220,9 @@ impl<'server> Handler for Client<'server>
                 {
                     match packet 
                     {
-                        ReceivePacket::Create { size } => self.handle_create_room(size)?,
-                        ReceivePacket::Join { id } => self.handle_join_room(id)?,
-                        ReceivePacket::Leave => self.handle_leave_room()?,
+                        ReceivePacket::Create { size } => return self.handle_create_room(size),
+                        ReceivePacket::Join { id } => return self.handle_join_room(id),
+                        ReceivePacket::Leave => return self.handle_leave_room(),
                     }
                 }
             }
@@ -246,8 +261,6 @@ impl<'server> Handler for Client<'server>
             
                                     sender.send(data.clone())?;                            
                                 }
-
-                                return Ok(());
                             }
                         }
                     }
