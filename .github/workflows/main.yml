@@ -15,13 +15,13 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            artifact_name: relay-linux-amd64
+            artifact_name: relay
             asset_name: relay-linux-amd64
           - os: windows-latest
-            artifact_name: relay-windows-amd64.exe
+            artifact_name: relay.exe
             asset_name: relay-windows-amd64.exe
           - os: macos-latest
-            artifact_name: relay-macos-amd64
+            artifact_name: relay
             asset_name: relay-macos-amd64
     steps:
       - name: Checkout
