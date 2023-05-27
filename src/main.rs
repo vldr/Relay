@@ -9,6 +9,8 @@ fn main()
     let address = env::args().nth(1).unwrap_or("0.0.0.0".to_string());
     let port = env::args().nth(2).unwrap_or("1234".to_string());
 
+    println!("Listening on {}:{}", address, port);
+
     let server = relay::Server::new();
     let ws = Builder::new()
         .with_settings(Settings {

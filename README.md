@@ -248,7 +248,7 @@ When *receiving*, the index byte will contain the index of the sender of the pac
 
 **Data:** 
 
-The data region contains *N* user-defined bytes, where N ≥ 0.
+The data region contains *N* user-defined bytes, where *N* ≥ 0.
 
 # Examples
 
