@@ -19,14 +19,36 @@ A fast and simple WebSocket relay, built in Rust, that enables a peer-to-peer-li
 
 # Protocol
 
+Relay uses the concept of rooms, which represent a list of clients that wish to send data between each other. A client can create a room and have other clients join the room. Once inside a room, data can be relayed.
+- To create and join rooms, we use the *text-protocol*. 
+- To send data between clients, we use the *binary-protocol*.
+
+The **text-protocol** uses JSON to communicate between the client and the relay server to create and join rooms.
+
+The **binary-protocol** uses a single byte at the start of your data to indicate the destination (when sending) and the source (when receiving).
+
+**Example:**
+
+To use the text-protocol in Javascript, you would write:
+```javascript
+const webSocket = new WebSocket("<URL>");
+webSocket.send(`{"type": "create"}`);
+```
+
+To use the binary-protocol in Javascript, you would write:
+```javascript
+const webSocket = new WebSocket("<URL>");
+webSocket.send(new Uint8Array(255, 1, 2, 3, 4));
+```
+
 ## Text Protocol
 
 ### `create` packet
-Creates a new room. If the size field is not provided, then a room of size *2* will be created. 
+Creates a new room.
 
 **Note:** If the client fails to create a room, an "error" packet is sent as a response instead.
 
-**Note:** A new room cannot be created whilst a client is already inside another room.
+**Note:** A new room cannot be created while a client is already inside a room.
 
 **Request:**
 
@@ -36,19 +58,39 @@ Creates a new room. If the size field is not provided, then a room of size *2* w
 | size (optional) | `number` | Specifies the size of the room. The minimum value is *1*, the maximum value is *254*, and the default value is *2*. |
 
 **Example:**
+
+<table>
+<tr>
+</tr>
+<tr>
+<td>
+
 ```json
 {
     "type": "create",
-    "size": 2
+    "size": 10
 }
 ```
+
+</td>
+<td>
+
+```json
+{
+    "type": "create"
+}
+```
+
+</td>
+</tr>
+</table>
 
 **Response:**  
 
 | Field | Type  | Description |
 |-------|------|-------------|
 | type  | `string` | The value will be "create". |
-| id | `string` | The randomly generated identifier of the room, which is used to join the room by others. |
+| id | `string` | The randomly generated identifier of the room, which is used to join the room by other clients. |
 
 **Example:**
 ```json
@@ -61,9 +103,9 @@ Creates a new room. If the size field is not provided, then a room of size *2* w
 ### `join` packet
 Joins a room.  
 
-**Note:** If the client fails to join the room, an "error" packet is sent as a response instead.
+**Note:** If the client fails to join a room, an "error" packet is sent as a response instead.
 
-**Note:** A room cannot be joined whilst a client is already inside another room.
+**Note:** A room cannot be joined while a client is already inside a room.
 
 **Request:**
 
@@ -85,7 +127,7 @@ Joins a room.
 | Field | Type  | Description |
 |-------|------|-------------|
 | type | `string` | The value will be "join". |
-| size (conditional) | `string \| null` | **Important:** The client that sent the "join" packet will receive the number of people that are in the room (excluding themselves). Everyone else in the room will receive the "join" packet with no size field. |
+| size (conditional) | `string \| null` | **Important:** The client that sent the "join" packet will receive the number of clients that are in the room (excluding themselves). Everyone else in the room will receive the "join" packet with no size field. |
 
 **Example:**
 
@@ -118,14 +160,14 @@ Joins a room.
 </table>
 
 ### `leave` packet
-Indicates that a person has left the room. 
+Indicates that a client has left a room. 
 
 **Response:**
 
 | Field | Type  | Description |
 |-------|------|-------------|
 | type  | `string` | The value will be "leave". |
-| index | `number` | Specifies the index of the user that has left. |
+| index | `number` | The index of the client that has left. |
 
 **Example:**
 ```json
@@ -180,14 +222,14 @@ Indicates that an error occurred when either joining or creating a room.
 
 When *sending*, the index byte indicates which client the packet should be sent to. 
 - A value of *255* indicates a broadcast, which means the packet will be sent to everyone in the room (excluding the sender).
-- A value between *0* and *254* indicates the index of the client that the packet will be sent to (a client can send to oneself).
+- A value between *0* and *254* indicates the index of the client that the packet will be sent to (a client can send to itself).
 
 When *receiving*, the index byte will contain the index of the sender of the packet.
 - A value between *0* and *254* indicates the index of the client that sent the packet.
 
 **Data:** 
 
-The data region contains *N* user-defined bytes, where $N \in \mathbb{Z}, N \ge 0$.
+The data region contains *N* user-defined bytes, where N ≥ 0.
 
 # Building
 **Note:** The following instructions assume that you are in a terminal (bash, cmd, etc).
