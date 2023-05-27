@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html>
+    <head>
+        <title>Chat Example</title>
+    </head>
+    <body>
+        <div id="status" style="color: gray;margin-bottom:5px;"></div>
+        <div id="chat" style="white-space: pre-wrap;margin-bottom:10px;"></div>
+        <input id="text" disabled type="text" />
+        <input id="submit" disabled type="button" value="Send" />
+    </body>
+    <script>
+        const statusElement = document.getElementById("status");
+        const chatElement = document.getElementById("chat");
+        const inputElement = document.getElementById("text");
+        const submitElement = document.getElementById("submit");
+        const webSocket = new WebSocket("wss://vldr.org:1235");
+
+        const send = () => {
+            const text = inputElement.value;
+            const index = new Uint8Array([ 255 ]);
+            const data = new TextEncoder().encode(text);
+
+            const merged = new Uint8Array(index.length + data.length);
+            merged.set(index);
+            merged.set(data, index.length);
+
+            webSocket.send(merged);
+            
+            chatElement.textContent += "> " + text + "\n";
+            inputElement.value = "";
+        };
+
+        const join = (id) => {
+            webSocket.send(
+                JSON.stringify(
+                    {
+                        type: "join",
+                        id
+                    }
+                )
+            );
+        };
+
+        const create = () => {
+            webSocket.send(
+                JSON.stringify(
+                    {
+                        type: "create",
+                        size: 254,
+                    }
+                )
+            );
+        };
+
+        webSocket.onopen = () => {
+            statusElement.textContent = "Connected.";
+
+            if (location.hash)
+            {
+                join(location.hash.replace("#", ""));
+            }
+            else 
+            {
+                create();
+            }
+        };
+
+        webSocket.onmessage = async (event) => {
+            if (event.data instanceof Blob)
+            {
+                const arrayBuffer = await event.data.arrayBuffer();
+                const text = new TextDecoder().decode(arrayBuffer.slice(1));
+
+                chatElement.textContent += "> " + text + "\n";
+            }
+            else
+            {
+                const message = JSON.parse(event.data);
+
+                switch (message.type) {
+                    case "create": {
+                        location.hash = message.id;
+
+                        statusElement.textContent = "Created room, send link to invite friends.";
+                        inputElement.disabled = false;
+                        submitElement.disabled = false;
+
+                        break;
+                    }
+                    case "join": {
+                        chatElement.textContent += "> Someone has joined the room. \n";
+                        statusElement.textContent = "Joined room.";
+                        inputElement.disabled = false;
+                        submitElement.disabled = false;
+
+                        break;
+                    }
+                    case "leave": {
+                        chatElement.textContent += "> Someone has left the room. \n";
+                        break;
+                    }
+                    case "error": {
+                        statusElement.textContent = message.message;
+                        break;
+                    }
+                }
+            }
+        };
+
+        webSocket.onclose = () => {
+            statusElement.textContent = "Disconnected.";
+
+            inputElement.disabled = true;
+            submitElement.disabled = true;
+        };
+
+        webSocket.onerror = (event) => {
+            statusElement.textContent = "Error.";
+
+            inputElement.disabled = true;
+            submitElement.disabled = true;
+        };
+
+        submitElement.onclick = send;
+        inputElement.onsubmit = send;
+    </script>
+</html>

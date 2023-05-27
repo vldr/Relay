@@ -6,14 +6,12 @@
 
 A fast and simple WebSocket relay, built in Rust, that enables a peer-to-peer-like network communication.
 
-- [About](#about)
-- [Getting Started](#about)
+- [Getting Started](#getting-started)
 - [Protocol](#protocol)
     - [Text Protocol](#text-protocol)
     - [Binary Protocol](#binary-protocol)
+- [Examples](#examples)
 - [Building](#building)
-
-# About
 
 # Getting Started
 
@@ -41,6 +39,8 @@ const webSocket = new WebSocket("<URL>");
 webSocket.send(new Uint8Array(255, 1, 2, 3, 4));
 ```
 
+**Note:** Text can still be sent using the binary-protocol, it would just need to be wrapped in a Uint8Array or be sent using the binary opcode (if using a WebSocket library).
+
 ## Text Protocol
 
 ### `create` packet
@@ -61,6 +61,8 @@ Creates a new room.
 
 <table>
 <tr>
+<th>Creating a room of size 10</th>
+<th>Creating a room of size 2 (default)</th>
 </tr>
 <tr>
 <td>
@@ -230,6 +232,15 @@ When *receiving*, the index byte will contain the index of the sender of the pac
 **Data:** 
 
 The data region contains *N* user-defined bytes, where N ≥ 0.
+
+# Examples
+
+Listed below are some example applications:
+
+- [Chat](tree/master/examples/chat)  
+A simple chat application that shows how text messages can be sent between clients.
+- [Cubic](https://github.com/vldr/Cubic/blob/master/Source/Network.cpp)  
+A multiplayer WebGL voxel sandbox game.
 
 # Building
 **Note:** The following instructions assume that you are in a terminal (bash, cmd, etc).
