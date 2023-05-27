@@ -4,7 +4,7 @@
 
 ---
 
-A fast, safe and simple WebSocket relay that emulates a peer-to-peer network built with Rust.
+A fast and simple WebSocket relay, built in Rust, that enables a peer-to-peer-like network communication.
 
 - [About](#about)
 - [Getting Started](#about)
@@ -22,9 +22,11 @@ A fast, safe and simple WebSocket relay that emulates a peer-to-peer network bui
 ## Text Protocol
 
 ### `create` packet
-Creates a new room. If the size field is not specified, a room of size *2* will be created by default. 
+Creates a new room. If the size field is not provided, then a room of size *2* will be created. 
 
 **Note:** If the client fails to create a room, an "error" packet is sent as a response instead.
+
+**Note:** A new room cannot be created whilst a client is already inside another room.
 
 **Request:**
 
@@ -60,6 +62,8 @@ Creates a new room. If the size field is not specified, a room of size *2* will 
 Joins a room.  
 
 **Note:** If the client fails to join the room, an "error" packet is sent as a response instead.
+
+**Note:** A room cannot be joined whilst a client is already inside another room.
 
 **Request:**
 
@@ -174,16 +178,16 @@ Indicates that an error occurred when either joining or creating a room.
 
 **Index:** 
 
-When *sending*, the index field indicates which client the packet should be sent to. 
+When *sending*, the index byte indicates which client the packet should be sent to. 
 - A value of *255* indicates a broadcast, which means the packet will be sent to everyone in the room (excluding the sender).
 - A value between *0* and *254* indicates the index of the client that the packet will be sent to (a client can send to oneself).
 
-When *receiving*, the index field will contain the index of the sender of the packet.
-- A value between *0* and *254* indicates the specific client that sent the packet.
+When *receiving*, the index byte will contain the index of the sender of the packet.
+- A value between *0* and *254* indicates the index of the client that sent the packet.
 
 **Data:** 
 
-The data field contains the *N* length, user-defined bytes.
+The data region contains *N* user-defined bytes, where $N \in \mathbb{Z}, N \ge 0$.
 
 # Building
 **Note:** The following instructions assume that you are in a terminal (bash, cmd, etc).
