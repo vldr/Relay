@@ -6,6 +6,13 @@
 
 A WebSocket relay that emulates a peer-to-peer network.
 
+- [About](#about)
+- [Getting Started](#about)
+- [Protocol](#protocol)
+    - [Text Protocol](#text-protocol)
+    - [Binary Protocol](#binary-protocol)
+- [Building](#building)
+
 # About
 
 # Getting Started
@@ -14,12 +21,12 @@ A WebSocket relay that emulates a peer-to-peer network.
 
 ## Text Protocol
 
-## `create` packet
+### `create` packet
 Creates a new room. If the size field is not specified, a room of size *2* will be created by default. 
 
 **Note:** If the client fails to create a room, an "error" packet is sent as a response instead.
 
-### **Request:**
+**Request:**
 
 | Field | Type  | Description |
 |-------|------|-------------|
@@ -34,12 +41,12 @@ Creates a new room. If the size field is not specified, a room of size *2* will 
 }
 ```
 
-### **Response:**  
+**Response:**  
 
 | Field | Type  | Description |
 |-------|------|-------------|
-| *type*  | `string` | The value will be "create". |
-| *id* | `string` | The randomly generated identifier of the room, which is used to join the room by others. |
+| type  | `string` | The value will be "create". |
+| id | `string` | The randomly generated identifier of the room, which is used to join the room by others. |
 
 **Example:**
 ```json
@@ -49,17 +56,17 @@ Creates a new room. If the size field is not specified, a room of size *2* will 
 }
 ```
 
-## `join` packet
+### `join` packet
 Joins a room.  
 
 **Note:** If the client fails to join the room, an "error" packet is sent as a response instead.
 
-### **Request:**
+**Request:**
 
 | Field | Type  | Description |
 |-------|------|-------------|
-| *type*  | string | The value should be "join". |
-| *id* | string | The identifier of the room to join. |
+| type | string | The value should be "join". |
+| id | string | The identifier of the room to join. |
 
 **Example:**
 ```json
@@ -69,12 +76,12 @@ Joins a room.
 }
 ```
 
-### **Response:**  
+**Response:**  
 
 | Field | Type  | Description |
 |-------|------|-------------|
-| *type*  | `string` | The value will be "join". |
-| *size* (conditional) | `string \| null` | **Important:** The client that sent the "join" packet will receive the number of people that are in the room (excluding themselves). Everyone else in the room will receive the "join" packet with no size field. |
+| type | `string` | The value will be "join". |
+| size (conditional) | `string \| null` | **Important:** The client that sent the "join" packet will receive the number of people that are in the room (excluding themselves). Everyone else in the room will receive the "join" packet with no size field. |
 
 **Example:**
 
@@ -106,10 +113,10 @@ Joins a room.
 </tr>
 </table>
 
-## `leave` packet
+### `leave` packet
 Indicates that a person has left the room. 
 
-### **Response:**
+**Response:**
 
 | Field | Type  | Description |
 |-------|------|-------------|
@@ -124,12 +131,12 @@ Indicates that a person has left the room.
 }
 ```
 
-## `error` packet
+### `error` packet
 Indicates that an error occurred when either joining or creating a room.  
 
 **Note:** This packet is only sent during the creation or the joining of a room. You can assume that if a user gets this packet, then they're not in a room.
 
-### **Response:**
+**Response:**
 
 | Field | Type  | Description |
 |-------|------|-------------|
@@ -144,8 +151,14 @@ Indicates that an error occurred when either joining or creating a room.
 }
 ```
 
----
-
 ## Binary Protocol
 
 # Building
+**Note:** The following instructions assume that you are in a terminal (bash, cmd, etc).
+
+1. Install [Rust](https://www.rust-lang.org/learn/get-started) and [Git](https://git-scm.com/).
+2. Run `git clone https://github.com/vldr/relay`
+3. Navigate to the cloned directory.
+3. Run `cargo build --release`
+
+After the build process finishes, the output executable will be located in the `target/release` folder.
