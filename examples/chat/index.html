@@ -89,7 +89,15 @@
                         break;
                     }
                     case "join": {
-                        chatElement.textContent += "> Someone has joined the room. \n";
+                        if (message.size) 
+                        {
+                            chatElement.textContent += `> Welcome! There are currently ${message.size + 1} users in the room.\n`;
+                        }
+                        else 
+                        {
+                            chatElement.textContent += "> Someone has joined the room.\n";
+                        }
+
                         statusElement.textContent = "Joined room.";
                         inputElement.disabled = false;
                         submitElement.disabled = false;
@@ -97,7 +105,7 @@
                         break;
                     }
                     case "leave": {
-                        chatElement.textContent += "> Someone has left the room. \n";
+                        chatElement.textContent += "> Someone has left the room.\n";
                         break;
                     }
                     case "error": {

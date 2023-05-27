@@ -1,5 +1,5 @@
 <p align="center">
-    <img src='logo.svg?raw=true' width='50%'>
+    <img src='logo.svg?raw=true'>
 </p>
 
 ---
@@ -15,6 +15,23 @@ A fast and simple WebSocket relay, built in Rust, that enables a peer-to-peer-li
 
 # Getting Started
 
+### Binaries
+
+To get started, you can either [build](#building) or download the precompiled binaries for your platform:
+
+- [Windows](https://github.com/vldr/Relay/releases/download/master/relay-windows-amd64.exe)
+- [Linux](https://github.com/vldr/Relay/releases/download/master/relay-linux-amd64)
+- [MacOS](https://github.com/vldr/Relay/releases/download/master/relay-macos-amd64)
+
+### Running
+
+The following are the command-line arguments for the application:
+
+```relay <IP> <PORT>```
+
+- `<IP>` is the IP address that should be bound to, for example: `127.0.0.1`
+- `<PORT>` is the port that should be bound to, for example: `1234`
+
 # Protocol
 
 Relay uses the concept of rooms, which represent a list of clients that wish to send data between each other. A client can create a room and have other clients join the room. Once inside a room, data can be relayed.
@@ -27,16 +44,16 @@ The **binary-protocol** uses a single byte at the start of your data to indicate
 
 **Example:**
 
-To use the text-protocol in Javascript, you would write:
+To use the text-protocol in JavaScript, you would write:
 ```javascript
 const webSocket = new WebSocket("<URL>");
 webSocket.send(`{"type": "create"}`);
 ```
 
-To use the binary-protocol in Javascript, you would write:
+To use the binary-protocol in JavaScript, you would write:
 ```javascript
 const webSocket = new WebSocket("<URL>");
-webSocket.send(new Uint8Array(255, 1, 2, 3, 4));
+webSocket.send(new Uint8Array(255, 1, 2, 3));
 ```
 
 **Note:** Text can still be sent using the binary-protocol, it would just need to be wrapped in a Uint8Array or be sent using the binary opcode (if using a WebSocket library).
@@ -237,7 +254,7 @@ The data region contains *N* user-defined bytes, where N ≥ 0.
 
 Listed below are some example applications:
 
-- [Chat](tree/master/examples/chat)  
+- [Chat](examples/chat)  
 A simple chat application that shows how text messages can be sent between clients.
 - [Cubic](https://github.com/vldr/Cubic/blob/master/Source/Network.cpp)  
 A multiplayer WebGL voxel sandbox game.
