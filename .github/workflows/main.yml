@@ -6,9 +6,11 @@ on:
     tags:
       - '*'
 
+permissions:
+  contents: write
+
 jobs:
   build-test-publish:
-    permissions: write-all
     name: ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     strategy:
