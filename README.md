@@ -134,8 +134,8 @@ Joins a room.
 
 | Field | Type  | Description |
 |-------|------|-------------|
-| type | string | The value should be "join". |
-| id | string | The identifier of the room to join. |
+| type | `string` | The value should be "join". |
+| id | `string` | The identifier of the room to join. |
 
 **Example:**
 ```json
