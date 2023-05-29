@@ -68,7 +68,7 @@ mod tests
             ws.run().expect("Failed to start test WebSocket server.");
         }); 
 
-        return rx.recv().unwrap()
+        rx.recv().unwrap()
     }
 
     #[test]
@@ -138,7 +138,25 @@ mod tests
         write_message!(socket_3, ReceivePacket::Join { id: room_id.clone() });
         read_message!(socket_3, TransmitPacket::Error { message } => assert_eq!("The room does not exist.", message));
 
+        //
+        // Test creating a single-occupant room.
+        // 
+
+        write_message!(socket_3, ReceivePacket::Create { size: Some(1) });
+
+        let room_id = read_message!(socket_3, TransmitPacket::Create { id } => id);
+
+        //
+        // Test joining a single-occupant room.
+        //
+
+        let mut socket_4 = create_socket!(socket_addr);
+
+        write_message!(socket_4, ReceivePacket::Join { id: room_id });
+        read_message!(socket_4, TransmitPacket::Error { message } => assert_eq!("The room is full.", message));
+
         socket_3.close(None).unwrap();
+        socket_4.close(None).unwrap();
     }
 
     #[test]
