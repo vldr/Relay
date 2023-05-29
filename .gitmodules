@@ -1,0 +1,3 @@
+[submodule "examples/cubic"]
+	path = examples/cubic
+	url = https://github.com/vldr/Cubic
