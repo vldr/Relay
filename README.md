@@ -259,7 +259,7 @@ The data region contains *N* user-defined bytes, where *N* ≥ 0.
 [Chat](examples/chat)  
 A simple chat application that shows how text messages can be sent between clients.
 
-[Cubic](examples/cubic/Source/Network.cpp)  
+[Cubic](https://github.com/vldr/Cubic/blob/master/Source/Network.cpp)  
 A multiplayer WebGL voxel sandbox game.
 
 # Building
