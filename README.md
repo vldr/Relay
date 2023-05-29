@@ -39,28 +39,28 @@ The following are the command-line arguments for the application:
 # Protocol
 
 Relay uses the concept of rooms, which represent a list of clients that wish to send data between each other. A client can create a room and have other clients join the room. Once inside a room, data can be relayed.
-- To create and join rooms, we use the *text-protocol*. 
-- To send data between clients, we use the *binary-protocol*.
+- To create and join rooms, we use the *text protocol*. 
+- To send data between clients, we use the *binary protocol*.
 
-The **text-protocol** uses JSON to communicate between the client and the relay server to create and join rooms.
+The **text protocol** uses JSON to communicate between the client and the relay server to create and join rooms.
 
-The **binary-protocol** uses a single byte at the start of your data to indicate the destination (when sending) and the source (when receiving).
+The **binary protocol** uses a single byte at the start of your data to indicate the destination (when sending) and the source (when receiving).
 
 **Example:**
 
-To use the text-protocol in JavaScript, you would write:
+To use the text protocol in JavaScript, you would write:
 ```javascript
 const webSocket = new WebSocket("<URL>");
 webSocket.send(`{"type": "create"}`);
 ```
 
-To use the binary-protocol in JavaScript, you would write:
+To use the binary protocol in JavaScript, you would write:
 ```javascript
 const webSocket = new WebSocket("<URL>");
 webSocket.send(new Uint8Array(255, 1, 2, 3));
 ```
 
-**Note:** Text can still be sent using the binary-protocol, it would just need to be wrapped in a Uint8Array or be sent using the binary opcode (if using a WebSocket library).
+**Note:** Text can still be sent using the binary protocol, it would just need to be wrapped in a Uint8Array or be sent using the binary opcode (if using a WebSocket library).
 
 ## Text Protocol
 
@@ -256,11 +256,10 @@ The data region contains *N* user-defined bytes, where *N* ≥ 0.
 
 # Examples
 
-Listed below are some example applications:
-
-- [Chat](examples/chat)  
+[Chat](examples/chat)  
 A simple chat application that shows how text messages can be sent between clients.
-- [Cubic](https://github.com/vldr/Cubic/blob/master/Source/Network.cpp)  
+
+[Cubic](examples/cubic/Source/Network.cpp)  
 A multiplayer WebGL voxel sandbox game.
 
 # Building
