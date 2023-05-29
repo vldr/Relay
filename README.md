@@ -9,6 +9,10 @@ A fast and simple WebSocket relay, built in Rust, that enables a peer-to-peer-li
 - [Getting Started](#getting-started)
 - [Protocol](#protocol)
     - [Text Protocol](#text-protocol)
+        - [`create` packet](#create-packet) 
+        - [`join` packet](#join-packet) 
+        - [`leave` packet](#leave-packet) 
+        - [`error` packet](#error-packet) 
     - [Binary Protocol](#binary-protocol)
 - [Examples](#examples)
 - [Building](#building)
@@ -130,8 +134,8 @@ Joins a room.
 
 | Field | Type  | Description |
 |-------|------|-------------|
-| type | string | The value should be "join". |
-| id | string | The identifier of the room to join. |
+| type | `string` | The value should be "join". |
+| id | `string` | The identifier of the room to join. |
 
 **Example:**
 ```json
