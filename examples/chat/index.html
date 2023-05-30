@@ -14,7 +14,7 @@
         const chatElement = document.getElementById("chat");
         const inputElement = document.getElementById("text");
         const submitElement = document.getElementById("submit");
-        const webSocket = new WebSocket("wss://vldr.org:1235");
+        const webSocket = new WebSocket("wss://vldr.org:8080/relay");
 
         const send = () => {
             const text = inputElement.value;
@@ -76,11 +76,11 @@
             }
             else
             {
-                const message = JSON.parse(event.data);
+                const packet = JSON.parse(event.data);
 
-                switch (message.type) {
+                switch (packet.type) {
                     case "create": {
-                        location.hash = message.id;
+                        location.hash = packet.id;
 
                         statusElement.textContent = "Created room, send link to invite friends.";
                         inputElement.disabled = false;
@@ -89,9 +89,9 @@
                         break;
                     }
                     case "join": {
-                        if (message.size) 
+                        if (packet.size) 
                         {
-                            chatElement.textContent += `> Welcome! There are currently ${message.size + 1} users in the room.\n`;
+                            chatElement.textContent += `> Welcome! There are currently ${packet.size + 1} users in the room.\n`;
                         }
                         else 
                         {
@@ -105,11 +105,11 @@
                         break;
                     }
                     case "leave": {
-                        chatElement.textContent += "> Someone has left the room.\n";
+                        chatElement.textContent += `> Someone (index ${packet.index}) has left the room.\n`;
                         break;
                     }
                     case "error": {
-                        statusElement.textContent = message.message;
+                        statusElement.textContent = packet.message;
                         break;
                     }
                 }
