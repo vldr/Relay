@@ -23,9 +23,9 @@ A fast and simple WebSocket relay, built in Rust, that enables a peer-to-peer-li
 
 To get started, you can either [build](#building) or download the precompiled binaries for your platform:
 
-- [Windows](https://github.com/vldr/Relay/releases/download/master/relay-windows-amd64.exe)
-- [Linux](https://github.com/vldr/Relay/releases/download/master/relay-linux-amd64)
-- [MacOS](https://github.com/vldr/Relay/releases/download/master/relay-macos-amd64)
+- [Windows](https://github.com/vldr/Relay/releases/download/stable/relay-windows-amd64.exe)
+- [Linux](https://github.com/vldr/Relay/releases/download/stable/relay-linux-amd64)
+- [MacOS](https://github.com/vldr/Relay/releases/download/stable/relay-macos-amd64)
 
 ### Running
 
