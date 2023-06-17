@@ -14,7 +14,7 @@
         const chatElement = document.getElementById("chat");
         const inputElement = document.getElementById("text");
         const submitElement = document.getElementById("submit");
-        const webSocket = new WebSocket("wss://vldr.org:8080/relay");
+        const webSocket = new WebSocket("ws://127.0.0.1:1234/");
 
         const send = () => {
             const text = inputElement.value;

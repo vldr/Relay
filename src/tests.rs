@@ -1,13 +1,11 @@
 #[cfg(test)]
 mod tests 
 {
-    use crate::relay::{Server, Client, TransmitPacket, ReceivePacket};
+    use crate::relay::{Server, ServerPacket, ClientPacket};
 
-    use ws::{Builder, Settings};
     use std::net::{SocketAddr};
+    use tokio::{net::{TcpListener}};
     use tungstenite::{Message, connect};
-    use std::thread::{spawn};
-    use std::sync::{mpsc};
 
     macro_rules! create_socket {
         ($value:expr) => {
@@ -17,6 +15,19 @@ mod tests
             }
         };
     }
+
+    macro_rules! close_socket {
+        ($value:expr) => {
+            {
+                $value.close(None).unwrap();
+                loop {
+                    if $value.read_message().is_err() {
+                        break;
+                    }
+                }
+            }
+        };
+    } 
 
     macro_rules! write_binary_message {
         ($value:expr, $value2:expr) => {
@@ -47,58 +58,53 @@ mod tests
         };
     }
 
-    fn setup() -> SocketAddr
+    async fn setup() -> SocketAddr
     {
-        let (tx, rx) = mpsc::channel();
+        let listener = TcpListener::bind("127.0.0.1:0").await
+            .expect("Failed to bind");
+    
+        let server = Server::new();
+        let socket_addr = listener.local_addr().unwrap();
 
-        spawn(move || {
-            let relay = Server::new();
-            let ws = Builder::new()
-                .with_settings(Settings {
-                    max_connections: usize::from(u8::MAX),
-                    ..Settings::default()
-                })
-                .build(|sender| Client::new(&relay, sender))
-                .expect("Failed to build test WebSocket server.")
-                .bind("127.0.0.1:0")
-                .expect("Failed to bind test WebSocket server.");
+        tokio::spawn(async move    
+        {
+            while let Ok((tcp_stream, _)) = listener.accept().await 
+            {
+                tokio::spawn(Server::handle_connection(server.clone(), tcp_stream));
+            }
+        });
 
-            tx.send(ws.local_addr().unwrap()).unwrap();
-            
-            ws.run().expect("Failed to start test WebSocket server.");
-        }); 
-
-        rx.recv().unwrap()
+        return socket_addr
     }
 
-    #[test]
-    fn errors() 
+    #[tokio::test(flavor = "multi_thread")]
+    async fn errors() 
     {
         //
         // Setup test.
         //
 
-        let socket_addr = setup();
-        
+        let socket_addr = setup().await;
+
         //
         // Test creating an invalid sized room.
         //
 
         let mut socket = create_socket!(socket_addr);
 
-        write_message!(socket, ReceivePacket::Create { size: Some(0) });
-        read_message!(socket, TransmitPacket::Error { message } => assert_eq!("The room size is not valid", message));
+        write_message!(socket, ClientPacket::Create { size: Some(0) });
+        read_message!(socket, ServerPacket::Error { message } => assert_eq!("The room size is not valid", message));
 
-        write_message!(socket, ReceivePacket::Create { size: Some(255) });
-        read_message!(socket, TransmitPacket::Error { message } => assert_eq!("The room size is not valid", message));
+        write_message!(socket, ClientPacket::Create { size: Some(255) });
+        read_message!(socket, ServerPacket::Error { message } => assert_eq!("The room size is not valid", message));
 
         //
         // Test creating a valid room.
         //  
 
-        write_message!(socket, ReceivePacket::Create { size: None });
+        write_message!(socket, ClientPacket::Create { size: None });
 
-        let room_id = read_message!(socket, TransmitPacket::Create { id } => id);
+        let room_id = read_message!(socket, ServerPacket::Create { id } => id);
 
 
         //
@@ -107,17 +113,17 @@ mod tests
         
         let mut socket_2 = create_socket!(socket_addr);
         
-        write_message!(socket_2, ReceivePacket::Join { id: String::new() });
-        read_message!(socket_2, TransmitPacket::Error { message } => assert_eq!("The room does not exist.", message));
+        write_message!(socket_2, ClientPacket::Join { id: String::new() });
+        read_message!(socket_2, ServerPacket::Error { message } => assert_eq!("The room does not exist.", message));
 
         //
         // Test joining the room.
         //
 
-        write_message!(socket_2, ReceivePacket::Join { id: room_id.clone() });
+        write_message!(socket_2, ClientPacket::Join { id: room_id.clone() });
 
-        read_message!(socket_2, TransmitPacket::Join { size } => assert_eq!(Some(1), size));
-        read_message!(socket, TransmitPacket::Join { size } => assert_eq!(None, size));
+        read_message!(socket_2, ServerPacket::Join { size } => assert_eq!(Some(1), size));
+        read_message!(socket, ServerPacket::Join { size } => assert_eq!(None, size));
 
         //
         // Test joining a full room.
@@ -125,26 +131,26 @@ mod tests
 
         let mut socket_3 = create_socket!(socket_addr);
         
-        write_message!(socket_3, ReceivePacket::Join { id: room_id.clone() });
-        read_message!(socket_3, TransmitPacket::Error { message } => assert_eq!("The room is full.", message));
+        write_message!(socket_3, ClientPacket::Join { id: room_id.clone() });
+        read_message!(socket_3, ServerPacket::Error { message } => assert_eq!("The room is full.", message));
 
         //
         // Test joining a removed room.
         //
         
-        socket.close(None).unwrap();
-        socket_2.close(None).unwrap();
+        close_socket!(socket);
+        close_socket!(socket_2);
 
-        write_message!(socket_3, ReceivePacket::Join { id: room_id.clone() });
-        read_message!(socket_3, TransmitPacket::Error { message } => assert_eq!("The room does not exist.", message));
+        write_message!(socket_3, ClientPacket::Join { id: room_id.clone() });
+        read_message!(socket_3, ServerPacket::Error { message } => assert_eq!("The room does not exist.", message));
 
         //
         // Test creating a single-occupant room.
         // 
 
-        write_message!(socket_3, ReceivePacket::Create { size: Some(1) });
+        write_message!(socket_3, ClientPacket::Create { size: Some(1) });
 
-        let room_id = read_message!(socket_3, TransmitPacket::Create { id } => id);
+        let room_id = read_message!(socket_3, ServerPacket::Create { id } => id);
 
         //
         // Test joining a single-occupant room.
@@ -152,15 +158,15 @@ mod tests
 
         let mut socket_4 = create_socket!(socket_addr);
 
-        write_message!(socket_4, ReceivePacket::Join { id: room_id });
-        read_message!(socket_4, TransmitPacket::Error { message } => assert_eq!("The room is full.", message));
+        write_message!(socket_4, ClientPacket::Join { id: room_id });
+        read_message!(socket_4, ServerPacket::Error { message } => assert_eq!("The room is full.", message));
 
-        socket_3.close(None).unwrap();
-        socket_4.close(None).unwrap();
+        close_socket!(socket_3);
+        close_socket!(socket_4);
     }
 
-    #[test]
-    fn communication() 
+    #[tokio::test(flavor = "multi_thread")]
+    async fn communication() 
     {
         //
         // The maximum number of clients to test.
@@ -172,7 +178,7 @@ mod tests
         // Setup test.
         //
 
-        let socket_addr = setup();
+        let socket_addr = setup().await;
 
         //
         // Create N clients, the first client creates a room, the rest join the room.
@@ -187,14 +193,14 @@ mod tests
 
             if expected_size == 0 
             {
-                write_message!(socket, ReceivePacket::Create { size: Some(N.into()) });
-                read_message!(socket, TransmitPacket::Create { id } => room_id = id);
+                write_message!(socket, ClientPacket::Create { size: Some(N.into()) });
+                read_message!(socket, ServerPacket::Create { id } => room_id = id);
 
                 sockets.push(socket);
             }
             else 
             {
-                write_message!(socket, ReceivePacket::Join { id: room_id.clone() } );
+                write_message!(socket, ClientPacket::Join { id: room_id.clone() } );
                 sockets.push(socket);
 
                 let size = sockets.len() - 1;
@@ -202,11 +208,11 @@ mod tests
                 {
                     if index == size
                     {
-                        read_message!(socket, TransmitPacket::Join { size } => assert_eq!(Some(expected_size), size));
+                        read_message!(socket, ServerPacket::Join { size } => assert_eq!(Some(expected_size), size));
                     }
                     else 
                     {
-                        read_message!(socket, TransmitPacket::Join { size } => assert_eq!(None, size));
+                        read_message!(socket, ServerPacket::Join { size } => assert_eq!(None, size));
                     }
                 }
             }
@@ -218,10 +224,10 @@ mod tests
 
         let mut socket = create_socket!(socket_addr);
 
-        write_message!(socket, ReceivePacket::Join { id: room_id.clone() } );
-        read_message!(socket, TransmitPacket::Error { message } => assert_eq!("The room is full.", message));  
+        write_message!(socket, ClientPacket::Join { id: room_id.clone() } );
+        read_message!(socket, ServerPacket::Error { message } => assert_eq!("The room is full.", message));  
 
-        socket.close(None).unwrap();
+        close_socket!(socket);
 
         //
         // Test broadcasting.
@@ -274,11 +280,12 @@ mod tests
         
         for _ in 0..N
         {
-            sockets.remove(0).close(None).unwrap();
+            let mut socket = sockets.remove(0);
+            close_socket!(socket);
 
             for socket in &mut sockets
             {
-                read_message!(socket, TransmitPacket::Leave { index } => assert_eq!(0, index));
+                read_message!(socket, ServerPacket::Leave { index } => assert_eq!(0, index));
             }
         }
 
@@ -288,14 +295,14 @@ mod tests
 
         let mut socket = create_socket!(socket_addr);
 
-        write_message!(socket, ReceivePacket::Join { id: room_id.clone() } );
-        read_message!(socket, TransmitPacket::Error { message } => assert_eq!("The room does not exist.", message));  
+        write_message!(socket, ClientPacket::Join { id: room_id.clone() } );
+        read_message!(socket, ServerPacket::Error { message } => assert_eq!("The room does not exist.", message));  
 
-        socket.close(None).unwrap();
+        close_socket!(socket);
     }
 
-    #[test]
-    fn indices() 
+    #[tokio::test(flavor = "multi_thread")]
+    async fn indices() 
     { 
         //
         // The maximum number of clients to test.
@@ -307,7 +314,7 @@ mod tests
         // Setup test.
         //
 
-        let socket_addr = setup();
+        let socket_addr = setup().await;
 
         //
         // Perform the test by either closing the connection or leaving the room.
@@ -330,14 +337,14 @@ mod tests
 
                     if expected_size == 0 
                     {
-                        write_message!(socket, ReceivePacket::Create { size: Some(N.into()) });
-                        read_message!(socket, TransmitPacket::Create { id } => room_id = id);
+                        write_message!(socket, ClientPacket::Create { size: Some(N.into()) });
+                        read_message!(socket, ServerPacket::Create { id } => room_id = id);
 
                         sockets.push(socket);
                     }
                     else 
                     {
-                        write_message!(socket, ReceivePacket::Join { id: room_id.clone() } );
+                        write_message!(socket, ClientPacket::Join { id: room_id.clone() } );
                         sockets.push(socket);
 
                         let size = sockets.len() - 1;
@@ -345,11 +352,11 @@ mod tests
                         {
                             if index == size
                             {
-                                read_message!(socket, TransmitPacket::Join { size } => assert_eq!(Some(expected_size), size));
+                                read_message!(socket, ServerPacket::Join { size } => assert_eq!(Some(expected_size), size));
                             }
                             else 
                             {
-                                read_message!(socket, TransmitPacket::Join { size } => assert_eq!(None, size));
+                                read_message!(socket, ServerPacket::Join { size } => assert_eq!(None, size));
                             }
                         }
                     }
@@ -374,21 +381,21 @@ mod tests
 
                     if method == "leave"
                     {
-                        write_message!(socket, ReceivePacket::Leave);
+                        write_message!(socket, ClientPacket::Leave);
                     }
                     else if method == "close"
                     {
-                        socket.close(None).unwrap();
+                        close_socket!(socket);
                     }
 
                     for socket in &mut sockets
                     {
-                        read_message!(socket, TransmitPacket::Leave { index } => assert_eq!(expected_index, index));
+                        read_message!(socket, ServerPacket::Leave { index } => assert_eq!(expected_index, index));
                     }
 
                     if method == "leave"
                     {
-                        socket.close(None).unwrap();
+                        close_socket!(socket);
                     }
                 }
             } 
