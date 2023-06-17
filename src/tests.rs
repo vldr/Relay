@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod tests 
 {
-    use crate::relay::{Server, ServerPacket, ClientPacket};
+    use crate::relay::{Server, ResponsePacket, RequestPacket};
 
     use std::net::{SocketAddr};
     use tokio::{net::{TcpListener}};
@@ -58,6 +58,9 @@ mod tests
         };
     }
 
+    ///
+    /// Starts up a test server and returns the address to the server.
+    /// 
     async fn setup() -> SocketAddr
     {
         let listener = TcpListener::bind("127.0.0.1:0").await
@@ -77,6 +80,9 @@ mod tests
         return socket_addr
     }
 
+    ///
+    /// Test all possible error responses (excluding the UUID collision).
+    /// 
     #[tokio::test(flavor = "multi_thread")]
     async fn errors() 
     {
@@ -92,19 +98,19 @@ mod tests
 
         let mut socket = create_socket!(socket_addr);
 
-        write_message!(socket, ClientPacket::Create { size: Some(0) });
-        read_message!(socket, ServerPacket::Error { message } => assert_eq!("The room size is not valid", message));
+        write_message!(socket, RequestPacket::Create { size: Some(0) });
+        read_message!(socket, ResponsePacket::Error { message } => assert_eq!("The room size is not valid", message));
 
-        write_message!(socket, ClientPacket::Create { size: Some(255) });
-        read_message!(socket, ServerPacket::Error { message } => assert_eq!("The room size is not valid", message));
+        write_message!(socket, RequestPacket::Create { size: Some(255) });
+        read_message!(socket, ResponsePacket::Error { message } => assert_eq!("The room size is not valid", message));
 
         //
         // Test creating a valid room.
         //  
 
-        write_message!(socket, ClientPacket::Create { size: None });
+        write_message!(socket, RequestPacket::Create { size: None });
 
-        let room_id = read_message!(socket, ServerPacket::Create { id } => id);
+        let room_id = read_message!(socket, ResponsePacket::Create { id } => id);
 
 
         //
@@ -113,17 +119,17 @@ mod tests
         
         let mut socket_2 = create_socket!(socket_addr);
         
-        write_message!(socket_2, ClientPacket::Join { id: String::new() });
-        read_message!(socket_2, ServerPacket::Error { message } => assert_eq!("The room does not exist.", message));
+        write_message!(socket_2, RequestPacket::Join { id: String::new() });
+        read_message!(socket_2, ResponsePacket::Error { message } => assert_eq!("The room does not exist.", message));
 
         //
         // Test joining the room.
         //
 
-        write_message!(socket_2, ClientPacket::Join { id: room_id.clone() });
+        write_message!(socket_2, RequestPacket::Join { id: room_id.clone() });
 
-        read_message!(socket_2, ServerPacket::Join { size } => assert_eq!(Some(1), size));
-        read_message!(socket, ServerPacket::Join { size } => assert_eq!(None, size));
+        read_message!(socket_2, ResponsePacket::Join { size } => assert_eq!(Some(1), size));
+        read_message!(socket, ResponsePacket::Join { size } => assert_eq!(None, size));
 
         //
         // Test joining a full room.
@@ -131,8 +137,8 @@ mod tests
 
         let mut socket_3 = create_socket!(socket_addr);
         
-        write_message!(socket_3, ClientPacket::Join { id: room_id.clone() });
-        read_message!(socket_3, ServerPacket::Error { message } => assert_eq!("The room is full.", message));
+        write_message!(socket_3, RequestPacket::Join { id: room_id.clone() });
+        read_message!(socket_3, ResponsePacket::Error { message } => assert_eq!("The room is full.", message));
 
         //
         // Test joining a removed room.
@@ -141,16 +147,16 @@ mod tests
         close_socket!(socket);
         close_socket!(socket_2);
 
-        write_message!(socket_3, ClientPacket::Join { id: room_id.clone() });
-        read_message!(socket_3, ServerPacket::Error { message } => assert_eq!("The room does not exist.", message));
+        write_message!(socket_3, RequestPacket::Join { id: room_id.clone() });
+        read_message!(socket_3, ResponsePacket::Error { message } => assert_eq!("The room does not exist.", message));
 
         //
         // Test creating a single-occupant room.
         // 
 
-        write_message!(socket_3, ClientPacket::Create { size: Some(1) });
+        write_message!(socket_3, RequestPacket::Create { size: Some(1) });
 
-        let room_id = read_message!(socket_3, ServerPacket::Create { id } => id);
+        let room_id = read_message!(socket_3, ResponsePacket::Create { id } => id);
 
         //
         // Test joining a single-occupant room.
@@ -158,13 +164,124 @@ mod tests
 
         let mut socket_4 = create_socket!(socket_addr);
 
-        write_message!(socket_4, ClientPacket::Join { id: room_id });
-        read_message!(socket_4, ServerPacket::Error { message } => assert_eq!("The room is full.", message));
+        write_message!(socket_4, RequestPacket::Join { id: room_id });
+        read_message!(socket_4, ResponsePacket::Error { message } => assert_eq!("The room is full.", message));
 
         close_socket!(socket_3);
         close_socket!(socket_4);
     }
 
+    ///
+    /// Test whether messages are leaking between two different rooms.
+    /// 
+    #[tokio::test(flavor = "multi_thread")]
+    async fn leaks() 
+    {
+        //
+        // Setup test.
+        //
+
+        let socket_addr = setup().await;
+
+        //
+        // Create four sockets, two sockets per room.
+        //
+    
+        let mut socket_room1 = create_socket!(socket_addr);
+        let mut socket_second_room1 = create_socket!(socket_addr);
+
+        let mut socket_room2 = create_socket!(socket_addr);
+        let mut socket_second_room2 = create_socket!(socket_addr);
+
+        //
+        // Test creating two rooms.
+        //  
+
+        write_message!(socket_room1, RequestPacket::Create { size: None });
+        write_message!(socket_room2, RequestPacket::Create { size: None });
+
+        let room_1_id = read_message!(socket_room1, ResponsePacket::Create { id } => id);
+        let room_2_id = read_message!(socket_room2, ResponsePacket::Create { id } => id);
+
+        //
+        // Test joining room 1.
+        //
+
+        write_message!(socket_second_room1, RequestPacket::Join { id: room_1_id.clone() });
+
+        read_message!(socket_second_room1, ResponsePacket::Join { size } => assert_eq!(Some(1), size));
+        read_message!(socket_room1, ResponsePacket::Join { size } => assert_eq!(None, size));
+
+        //
+        // Test joining room 2.
+        //
+
+        write_message!(socket_second_room2, RequestPacket::Join { id: room_2_id.clone() });
+
+        read_message!(socket_second_room2, ResponsePacket::Join { size } => assert_eq!(Some(1), size));
+        read_message!(socket_room2, ResponsePacket::Join { size } => assert_eq!(None, size));
+
+        //
+        // Test broadcasting.
+        // 
+
+        write_binary_message!(socket_room1, vec![ u8::MAX, 0, 1, 2, 3 ]);
+        assert_eq!(vec![ 0, 0, 1, 2, 3 ], read_binary_message!(socket_second_room1));
+
+        write_binary_message!(socket_room2, vec![ u8::MAX, 4, 5, 6, 7 ]);
+        assert_eq!(vec![ 0, 4, 5, 6, 7 ], read_binary_message!(socket_second_room2));
+
+        write_binary_message!(socket_second_room1, vec![ u8::MAX, 0, 1, 2, 3 ]);
+        assert_eq!(vec![ 1, 0, 1, 2, 3 ], read_binary_message!(socket_room1));
+
+        write_binary_message!(socket_second_room2, vec![ u8::MAX, 4, 5, 6, 7 ]);
+        assert_eq!(vec![ 1, 4, 5, 6, 7 ], read_binary_message!(socket_room2));
+
+        //
+        // Test sending to each socket.
+        //
+
+        write_binary_message!(socket_room1, vec![ 1, 0, 1, 2, 3 ]);
+        assert_eq!(vec![ 0, 0, 1, 2, 3 ], read_binary_message!(socket_second_room1));
+
+        write_binary_message!(socket_room2, vec![ 1, 4, 5, 6, 7 ]);
+        assert_eq!(vec![ 0, 4, 5, 6, 7 ], read_binary_message!(socket_second_room2));
+
+        write_binary_message!(socket_second_room1, vec![ 0, 0, 1, 2, 3 ]);
+        assert_eq!(vec![ 1, 0, 1, 2, 3 ], read_binary_message!(socket_room1));
+
+        write_binary_message!(socket_second_room2, vec![ 0, 4, 5, 6, 7 ]);
+        assert_eq!(vec![ 1, 4, 5, 6, 7 ], read_binary_message!(socket_room2));
+
+        //
+        // Test sending to oneself.
+        //
+
+        write_binary_message!(socket_room1, vec![ 0, 0, 1, 2, 3 ]);
+        assert_eq!(vec![ 0, 0, 1, 2, 3 ], read_binary_message!(socket_room1));
+
+        write_binary_message!(socket_room2, vec![ 0, 4, 5, 6, 7 ]);
+        assert_eq!(vec![ 0, 4, 5, 6, 7 ], read_binary_message!(socket_room2));
+
+        write_binary_message!(socket_second_room1, vec![ 1, 0, 1, 2, 3 ]);
+        assert_eq!(vec![ 1, 0, 1, 2, 3 ], read_binary_message!(socket_second_room1));
+
+        write_binary_message!(socket_second_room2, vec![ 1, 4, 5, 6, 7 ]);
+        assert_eq!(vec![ 1, 4, 5, 6, 7 ], read_binary_message!(socket_second_room2));
+
+        //
+        // Close all sockets
+        //
+
+        close_socket!(socket_room1);
+        close_socket!(socket_room1);
+        close_socket!(socket_second_room1);
+        close_socket!(socket_second_room2);
+    }
+
+    ///
+    /// Test sending data between clients in the room (includes broadcast messages and empty messages).
+    /// 
     #[tokio::test(flavor = "multi_thread")]
     async fn communication() 
     {
@@ -193,14 +310,14 @@ mod tests
 
             if expected_size == 0 
             {
-                write_message!(socket, ClientPacket::Create { size: Some(N.into()) });
-                read_message!(socket, ServerPacket::Create { id } => room_id = id);
+                write_message!(socket, RequestPacket::Create { size: Some(N.into()) });
+                read_message!(socket, ResponsePacket::Create { id } => room_id = id);
 
                 sockets.push(socket);
             }
             else 
             {
-                write_message!(socket, ClientPacket::Join { id: room_id.clone() } );
+                write_message!(socket, RequestPacket::Join { id: room_id.clone() } );
                 sockets.push(socket);
 
                 let size = sockets.len() - 1;
@@ -208,11 +325,11 @@ mod tests
                 {
                     if index == size
                     {
-                        read_message!(socket, ServerPacket::Join { size } => assert_eq!(Some(expected_size), size));
+                        read_message!(socket, ResponsePacket::Join { size } => assert_eq!(Some(expected_size), size));
                     }
                     else 
                     {
-                        read_message!(socket, ServerPacket::Join { size } => assert_eq!(None, size));
+                        read_message!(socket, ResponsePacket::Join { size } => assert_eq!(None, size));
                     }
                 }
             }
@@ -224,8 +341,8 @@ mod tests
 
         let mut socket = create_socket!(socket_addr);
 
-        write_message!(socket, ClientPacket::Join { id: room_id.clone() } );
-        read_message!(socket, ServerPacket::Error { message } => assert_eq!("The room is full.", message));  
+        write_message!(socket, RequestPacket::Join { id: room_id.clone() } );
+        read_message!(socket, ResponsePacket::Error { message } => assert_eq!("The room is full.", message));  
 
         close_socket!(socket);
 
@@ -285,7 +402,7 @@ mod tests
 
             for socket in &mut sockets
             {
-                read_message!(socket, ServerPacket::Leave { index } => assert_eq!(0, index));
+                read_message!(socket, ResponsePacket::Leave { index } => assert_eq!(0, index));
             }
         }
 
@@ -295,12 +412,15 @@ mod tests
 
         let mut socket = create_socket!(socket_addr);
 
-        write_message!(socket, ClientPacket::Join { id: room_id.clone() } );
-        read_message!(socket, ServerPacket::Error { message } => assert_eq!("The room does not exist.", message));  
+        write_message!(socket, RequestPacket::Join { id: room_id.clone() } );
+        read_message!(socket, ResponsePacket::Error { message } => assert_eq!("The room does not exist.", message));  
 
         close_socket!(socket);
     }
 
+    ///
+    /// Test the indices returned by the join and leave packets.
+    /// 
     #[tokio::test(flavor = "multi_thread")]
     async fn indices() 
     { 
@@ -337,14 +457,14 @@ mod tests
 
                     if expected_size == 0 
                     {
-                        write_message!(socket, ClientPacket::Create { size: Some(N.into()) });
-                        read_message!(socket, ServerPacket::Create { id } => room_id = id);
+                        write_message!(socket, RequestPacket::Create { size: Some(N.into()) });
+                        read_message!(socket, ResponsePacket::Create { id } => room_id = id);
 
                         sockets.push(socket);
                     }
                     else 
                     {
-                        write_message!(socket, ClientPacket::Join { id: room_id.clone() } );
+                        write_message!(socket, RequestPacket::Join { id: room_id.clone() } );
                         sockets.push(socket);
 
                         let size = sockets.len() - 1;
@@ -352,11 +472,11 @@ mod tests
                         {
                             if index == size
                             {
-                                read_message!(socket, ServerPacket::Join { size } => assert_eq!(Some(expected_size), size));
+                                read_message!(socket, ResponsePacket::Join { size } => assert_eq!(Some(expected_size), size));
                             }
                             else 
                             {
-                                read_message!(socket, ServerPacket::Join { size } => assert_eq!(None, size));
+                                read_message!(socket, ResponsePacket::Join { size } => assert_eq!(None, size));
                             }
                         }
                     }
@@ -381,7 +501,7 @@ mod tests
 
                     if method == "leave"
                     {
-                        write_message!(socket, ClientPacket::Leave);
+                        write_message!(socket, RequestPacket::Leave);
                     }
                     else if method == "close"
                     {
@@ -390,7 +510,7 @@ mod tests
 
                     for socket in &mut sockets
                     {
-                        read_message!(socket, ServerPacket::Leave { index } => assert_eq!(expected_index, index));
+                        read_message!(socket, ResponsePacket::Leave { index } => assert_eq!(expected_index, index));
                     }
 
                     if method == "leave"

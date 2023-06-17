@@ -10,7 +10,7 @@ type Sender = UnboundedSender<Message>;
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
-pub enum ClientPacket {
+pub enum RequestPacket {
     Join { id: String },
     Create { size: Option<usize> },
     Leave,
@@ -18,7 +18,7 @@ pub enum ClientPacket {
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
-pub enum ServerPacket {
+pub enum ResponsePacket {
     Join { 
         #[serde(skip_serializing_if = "Option::is_none")] 
         size: Option<usize> 
@@ -30,13 +30,13 @@ pub enum ServerPacket {
 
 trait PacketSender 
 {
-    fn send_packet(&self, packet: ServerPacket) -> Result<(), TrySendError<Message>>;
+    fn send_packet(&self, packet: ResponsePacket) -> Result<(), TrySendError<Message>>;
     fn send_error_packet(&self, message: String) -> Result<(), TrySendError<Message>>;
 }
 
 impl PacketSender for Sender 
 {
-    fn send_packet(&self, packet: ServerPacket) -> Result<(), TrySendError<Message>>
+    fn send_packet(&self, packet: ResponsePacket) -> Result<(), TrySendError<Message>>
     {
         let serialized_packet = serde_json::to_string(&packet).unwrap();
 
@@ -45,7 +45,7 @@ impl PacketSender for Sender
 
     fn send_error_packet(&self, message: String) -> Result<(), TrySendError<Message>>
     {
-        let error_packet = ServerPacket::Error { message };
+        let error_packet = ResponsePacket::Error { message };
 
         self.send_packet(error_packet)
     }
@@ -165,7 +165,7 @@ impl Client
         server.rooms.insert(room_id.clone(), room);
 
         self.room_id = Some(room_id.clone());
-        self.sender.send_packet(ServerPacket::Create { id: room_id })
+        self.sender.send_packet(ResponsePacket::Create { id: room_id })
     }
 
     fn handle_join_room(&mut self, server: &RwLock<Server>, room_id: String) -> Result<(), TrySendError<Message>>
@@ -196,11 +196,11 @@ impl Client
         {
             if sender.same_receiver(&self.sender) 
             {
-                sender.send_packet(ServerPacket::Join { size: Some(room.senders.len() - 1) })?;
+                sender.send_packet(ResponsePacket::Join { size: Some(room.senders.len() - 1) })?;
             }
             else 
             {
-                sender.send_packet(ServerPacket::Join { size: None })?;
+                sender.send_packet(ResponsePacket::Join { size: None })?;
             }
         }
 
@@ -235,7 +235,7 @@ impl Client
 
         for sender in &room.senders
         {
-            sender.send_packet(ServerPacket::Leave { index })?;
+            sender.send_packet(ResponsePacket::Leave { index })?;
         }
 
         if room.senders.is_empty()
@@ -264,9 +264,9 @@ impl Client
 
             return match packet 
             {
-                ClientPacket::Create { size } => self.handle_create_room(server, size),
-                ClientPacket::Join { id } => self.handle_join_room(server, id),
-                ClientPacket::Leave => self.handle_leave_room(server),
+                RequestPacket::Create { size } => self.handle_create_room(server, size),
+                RequestPacket::Join { id } => self.handle_join_room(server, id),
+                RequestPacket::Leave => self.handle_leave_room(server),
             }
         }
         else if message.is_binary()
