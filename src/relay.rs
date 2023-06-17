@@ -137,106 +137,113 @@ impl Client
 
     fn handle_create_room(&mut self, server: &RwLock<Server>, size_option: Option<usize>) -> Result<(), TrySendError<Message>>
     {
-        if let Ok(mut server) = server.write() 
+        let Ok(mut server) = server.write() else 
         {
-            if server.rooms.iter().any(|(_, room)| room.senders.iter().any(|sender| sender.same_receiver(&self.sender))) 
-            {
-                return Ok(());
-            }
+            return Ok(());
+        };
 
-            let size = size_option.unwrap_or(Room::DEFAULT_ROOM_SIZE);
-            if size == Room::MIN_ROOM_SIZE || size >= Room::MAX_ROOM_SIZE
-            {
-                return self.sender.send_error_packet("The room size is not valid".to_string());
-            }
-
-            let room_id = Uuid::new_v4().to_string();
-            self.room_id = Some(room_id.clone());
-
-            if server.rooms.contains_key(&room_id)
-            {
-                return self.sender.send_error_packet("A room with that identifier already exists.".to_string());
-            }
-
-            let mut room = Room::new(size);
-            room.senders.push(self.sender.clone());
-            server.rooms.insert(room_id.clone(), room);
-            
-            return self.sender.send_packet(ServerPacket::Create { id: room_id })
+        if server.rooms.iter().any(|(_, room)| room.senders.iter().any(|sender| sender.same_receiver(&self.sender))) 
+        {
+            return Ok(());
         }
 
-        Ok(())
+        let size = size_option.unwrap_or(Room::DEFAULT_ROOM_SIZE);
+        if size == Room::MIN_ROOM_SIZE || size >= Room::MAX_ROOM_SIZE
+        {
+            return self.sender.send_error_packet("The room size is not valid".to_string());
+        }
+
+        let room_id = Uuid::new_v4().to_string();
+        self.room_id = Some(room_id.clone());
+
+        if server.rooms.contains_key(&room_id)
+        {
+            return self.sender.send_error_packet("A room with that identifier already exists.".to_string());
+        }
+
+        let mut room = Room::new(size);
+        room.senders.push(self.sender.clone());
+        server.rooms.insert(room_id.clone(), room);
+        
+        self.sender.send_packet(ServerPacket::Create { id: room_id })
     }
 
     fn handle_join_room(&mut self, server: &RwLock<Server>, room_id: String) -> Result<(), TrySendError<Message>>
     {
-        if let Ok(mut server) = server.write() 
+        let Ok(mut server) = server.write() else 
         {
-            if server.rooms.iter().any(|(_, room)| room.senders.iter().any(|sender| sender.same_receiver(&self.sender))) 
+            return Ok(());
+        };
+
+        if server.rooms.iter().any(|(_, room)| room.senders.iter().any(|sender| sender.same_receiver(&self.sender))) 
+        {
+            return Ok(());
+        }
+
+        let Some(room) = server.rooms.get_mut(&room_id) else 
+        {
+            return self.sender.send_error_packet("The room does not exist.".to_string()); 
+        };
+
+        if room.senders.len() >= room.size
+        {
+            return self.sender.send_error_packet("The room is full.".to_string());
+        }
+
+        room.senders.push(self.sender.clone());
+
+        for sender in &room.senders 
+        {
+            if sender.same_receiver(&self.sender) 
             {
-                return Ok(());
-            }
-
-            if let Some(room) = server.rooms.get_mut(&room_id)
-            {
-                if room.senders.len() >= room.size
-                {
-                    return self.sender.send_error_packet("The room is full.".to_string());
-                }
-
-                room.senders.push(self.sender.clone());
-
-                for sender in &room.senders 
-                {
-                    if sender.same_receiver(&self.sender) 
-                    {
-                        sender.send_packet(ServerPacket::Join { size: Some(room.senders.len() - 1) })?;
-                    }
-                    else 
-                    {
-                        sender.send_packet(ServerPacket::Join { size: None })?;
-                    }
-                }
-
-                self.room_id = Some(room_id);
+                sender.send_packet(ServerPacket::Join { size: Some(room.senders.len() - 1) })?;
             }
             else 
             {
-                return self.sender.send_error_packet("The room does not exist.".to_string()); 
+                sender.send_packet(ServerPacket::Join { size: None })?;
             }
         }
+
+        self.room_id = Some(room_id);
         
         Ok(())
-        
     }
 
     fn handle_leave_room(&mut self, server: &RwLock<Server>) -> Result<(), TrySendError<Message>>
     {
-        if let Ok(mut server) = server.write() 
+        let Ok(mut server) = server.write() else 
         {
-            if let Some(room_id) = &self.room_id
-            {
-                if let Some(room) = server.rooms.get_mut(room_id)
-                {
-                    if let Some(index) = room.senders.iter().position(|sender| sender.same_receiver(&self.sender))
-                    {
-                        room.senders.remove(index);
+            return Ok(());
+        };
 
-                        for sender in &room.senders
-                        {
-                            sender.send_packet(ServerPacket::Leave { index })?;
-                        }
-                    }
+        let Some(room_id) = &self.room_id else 
+        {
+            return Ok(());
+        };
+        
+        let Some(room) = server.rooms.get_mut(room_id) else 
+        {
+            return Ok(());
+        };
+        
+        let Some(index) = room.senders.iter().position(|sender| sender.same_receiver(&self.sender)) else 
+        {
+            return Ok(());
+        };
 
-                    if room.senders.is_empty()
-                    {
-                        server.rooms.remove(room_id);
-                    }
-                }
+        room.senders.remove(index);
 
-                self.room_id = None;
-            }
+        for sender in &room.senders
+        {
+            sender.send_packet(ServerPacket::Leave { index })?;
         }
+
+        if room.senders.is_empty()
+        {
+            server.rooms.remove(room_id);
+        }
+
+        self.room_id = None;
 
         Ok(())
     }
@@ -245,57 +252,70 @@ impl Client
     {
         if message.is_text() 
         {
-            if let Ok(text) = message.into_text()
+            let Ok(text) = message.into_text() else 
             {
-                if let Ok(packet) = serde_json::from_str(&text) 
-                {
-                    match packet 
-                    {
-                        ClientPacket::Create { size } => return self.handle_create_room(server, size),
-                        ClientPacket::Join { id } => return self.handle_join_room(server, id),
-                        ClientPacket::Leave => return self.handle_leave_room(server),
-                    }
-                }
+                return Ok(())
+            };
+
+            let Ok(packet) = serde_json::from_str(&text) else 
+            {
+                return Ok(())
+            };
+
+            return match packet 
+            {
+                ClientPacket::Create { size } => self.handle_create_room(server, size),
+                ClientPacket::Join { id } => self.handle_join_room(server, id),
+                ClientPacket::Leave => self.handle_leave_room(server),
             }
         }
         else if message.is_binary()
         {
-            if let Ok(server) = server.read() 
+            let Ok(server) = server.read() else 
             {
-                if let Some(room_id) = &self.room_id
-                {
-                    if let Some(room) = server.rooms.get(room_id) 
+                return Ok(());
+            };
+
+            let Some(room_id) = &self.room_id else 
+            {
+                return Ok(());
+            };
+
+            let Some(room) = server.rooms.get(room_id) else 
+            {
+                return Ok(());
+            };
+
+            let Some(index) = room.senders.iter().position(|sender| sender.same_receiver(&self.sender)) else 
+            {
+                return Ok(());
+            };
+
+            let mut data = message.into_data();
+            if data.is_empty() 
+            {
+                return Ok(());
+            }
+
+            let source = u8::try_from(index).unwrap();
+            let destination = usize::from(data[0]);
+            
+            data[0] = source;
+
+            if destination < room.senders.len()
+            {
+                return room.senders[destination].unbounded_send(Message::Binary(data));
+            }
+            else if destination == usize::from(u8::MAX)
+            {
+                for sender in &room.senders 
+                {   
+                    if sender.same_receiver(&self.sender)
                     {
-                        if let Some(index) = room.senders.iter().position(|sender| sender.same_receiver(&self.sender))
-                        {
-                            let mut data = message.into_data();
-    
-                            if !data.is_empty()
-                            {
-                                let source = u8::try_from(index).unwrap();
-                                let destination = usize::from(data[0]);
-                                
-                                data[0] = source;
-    
-                                if destination < room.senders.len()
-                                {
-                                    return room.senders[destination].unbounded_send(Message::Binary(data));
-                                }
-                                else if destination == usize::from(u8::MAX)
-                                {
-                                    for sender in &room.senders 
-                                    {   
-                                        if sender.same_receiver(&self.sender)
-                                        {
-                                            continue;
-                                        }
-                
-                                        sender.unbounded_send(Message::Binary(data.clone()))?;                            
-                                    }
-                                }
-                            }
-                        }
+                        continue;
                     }
+
+                    sender.unbounded_send(Message::Binary(data.clone()))?;                            
                 }
             }
         }
