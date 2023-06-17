@@ -154,8 +154,6 @@ impl Client
         }
 
         let room_id = Uuid::new_v4().to_string();
-        self.room_id = Some(room_id.clone());
-
         if server.rooms.contains_key(&room_id)
         {
             return self.sender.send_error_packet("A room with that identifier already exists.".to_string());
@@ -163,8 +161,10 @@ impl Client
 
         let mut room = Room::new(size);
         room.senders.push(self.sender.clone());
-        server.rooms.insert(room_id.clone(), room);
         
+        server.rooms.insert(room_id.clone(), room);
+
+        self.room_id = Some(room_id.clone());
         self.sender.send_packet(ServerPacket::Create { id: room_id })
     }
 
