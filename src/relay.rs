@@ -17,7 +17,7 @@ pub enum ClientPacket {
 } 
 
 #[derive(Debug, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "camelCase", )]
+#[serde(tag = "type", rename_all = "camelCase")]
 pub enum ServerPacket {
     Join { 
         #[serde(skip_serializing_if = "Option::is_none")] 
