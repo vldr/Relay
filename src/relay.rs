@@ -1,19 +1,24 @@
-use ws::{Handler, Message, Result, Sender};
-use std::{collections::{HashMap}, cell::{RefCell}};
+use std::{collections::HashMap, sync::{RwLock, Arc}};
+use futures_util::{future, pin_mut, stream::TryStreamExt, StreamExt};
+use futures_channel::mpsc::{UnboundedSender, TrySendError};
+use tokio_tungstenite::tungstenite::protocol::{Message};
+use tokio::{net::TcpStream};
 use serde::{Deserialize, Serialize};
 use uuid::{Uuid};
 
+type Sender = UnboundedSender<Message>;
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
-pub enum ReceivePacket {
+pub enum ClientPacket {
     Join { id: String },
     Create { size: Option<usize> },
     Leave,
 } 
 
 #[derive(Debug, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "camelCase", )]
-pub enum TransmitPacket {
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum ServerPacket {
     Join { 
         #[serde(skip_serializing_if = "Option::is_none")] 
         size: Option<usize> 
@@ -25,22 +30,22 @@ pub enum TransmitPacket {
 
 trait PacketSender 
 {
-    fn send_packet(&self, packet: TransmitPacket) -> Result<()>;
-    fn send_error_packet(&self, message: String) -> Result<()>;
+    fn send_packet(&self, packet: ServerPacket) -> Result<(), TrySendError<Message>>;
+    fn send_error_packet(&self, message: String) -> Result<(), TrySendError<Message>>;
 }
 
 impl PacketSender for Sender 
 {
-    fn send_packet(&self, packet: TransmitPacket) -> Result<()>
+    fn send_packet(&self, packet: ServerPacket) -> Result<(), TrySendError<Message>>
     {
         let serialized_packet = serde_json::to_string(&packet).unwrap();
 
-        self.send(Message::Text(serialized_packet))
+        self.unbounded_send(Message::Text(serialized_packet))
     }
 
-    fn send_error_packet(&self, message: String) -> Result<()>
+    fn send_error_packet(&self, message: String) -> Result<(), TrySendError<Message>>
     {
-        let error_packet = TransmitPacket::Error { message };
+        let error_packet = ServerPacket::Error { message };
 
         self.send_packet(error_packet)
     }
@@ -67,150 +72,176 @@ impl Room
     }
 }
 
-pub struct Server 
+pub struct Server
 {
     rooms: HashMap<String, Room>,
 }
 
-impl Server 
+impl Server
 {
-    pub fn new() -> RefCell<Server>
+    pub fn new() -> Arc<RwLock<Server>>
     {
-        RefCell::new(
-            Server{
-                rooms: HashMap::new(),
-            }
+        Arc::new(
+            RwLock::new(
+                Server{
+                    rooms: HashMap::new(),
+                }
+            )
         )
     }
-}
 
-pub struct Client<'server>
-{
-    server: &'server RefCell<Server>,
-    sender: Sender,
-
-    room_id: Option<String>
-}
-
-impl<'server> Client<'server>
-{
-    pub fn new(server: &'server RefCell<Server>, sender: Sender) -> Client<'server>
+    pub async fn handle_connection(server: Arc<RwLock<Server>>, tcp_stream: TcpStream) 
     {
-        Client { server, sender, room_id: None }
-    }
-
-    fn handle_create_room(&mut self, size_option: Option<usize>) -> Result<()>
-    {
-        let mut server = self.server.borrow_mut();
-        
-        if server.rooms.iter().any(|(_, room)| room.senders.iter().any(|sender| *sender == self.sender)) 
+        if let Ok(websocket_stream) = tokio_tungstenite::accept_async(tcp_stream).await 
         {
-            return Ok(());
-        }
+            let (sender, receiver) = futures_channel::mpsc::unbounded();
+            let (outgoing, incoming) = websocket_stream.split();
 
-        let size = size_option.unwrap_or(Room::DEFAULT_ROOM_SIZE);
-        if size == Room::MIN_ROOM_SIZE || size >= Room::MAX_ROOM_SIZE
-        {
-            return self.sender.send_error_packet("The room size is not valid".to_string());
-        }
+            let mut client = Client::new(sender.clone());
 
-        let room_id = Uuid::new_v4().to_string();
-        self.room_id = Some(room_id.clone());
-
-        if server.rooms.contains_key(&room_id)
-        {
-            return self.sender.send_error_packet("A room with that identifier already exists.".to_string());
-        }
-
-        let mut room = Room::new(size);
-        room.senders.push(self.sender.clone());
-        server.rooms.insert(room_id.clone(), room);
-        
-        self.sender.send_packet(TransmitPacket::Create { id: room_id })
-    }
-
-    fn handle_join_room(&mut self, room_id: String) -> Result<()>
-    {
-        let mut server = self.server.borrow_mut();
-
-        if server.rooms.iter().any(|(_, room)| room.senders.iter().any(|sender| *sender == self.sender)) 
-        {
-            return Ok(());
-        }
-
-        if let Some(room) = server.rooms.get_mut(&room_id)
-        {
-            if room.senders.len() >= room.size
+            let incoming_handler = incoming.try_for_each(|message| 
             {
-                return self.sender.send_error_packet("The room is full.".to_string());
-            }
-
-            room.senders.push(self.sender.clone());
-
-            for sender in &room.senders 
-            {
-                if *sender == self.sender 
+                if let Err(error) = client.handle_message(&server, message) 
                 {
-                    sender.send_packet(TransmitPacket::Join { size: Some(room.senders.len() - 1) })?;
+                    println!("Failed to handle message: {}", error);
                 }
-                else 
-                {
-                    sender.send_packet(TransmitPacket::Join { size: None })?;
-                }
-            }
 
-            self.room_id = Some(room_id);
-        }
-        else 
-        {
-            return self.sender.send_error_packet("The room does not exist.".to_string()); 
-        }
+                future::ok(())
+            });
+
+            let outgoing_handler = receiver.map(Ok).forward(outgoing);
         
-        Ok(())
-    }
+            pin_mut!(incoming_handler, outgoing_handler);
+            future::select(incoming_handler, outgoing_handler).await;
 
-    fn handle_leave_room(&mut self) -> Result<()> 
-    {
-        let mut server = self.server.borrow_mut();
-
-        if let Some(room_id) = &self.room_id
-        {
-            if let Some(room) = server.rooms.get_mut(room_id)
+            if let Err(error) = client.handle_close(&server)
             {
-                if let Some(index) = room.senders.iter().position(|sender| *sender == self.sender)
-                {
-                    room.senders.remove(index);
-
-                    for sender in &room.senders
-                    {
-                        sender.send_packet(TransmitPacket::Leave { index })?;
-                    }
-                }
-
-                if room.senders.is_empty()
-                {
-                    server.rooms.remove(room_id);
-                }
+                println!("Failed to handle close: {}", error);
             }
-
-            self.room_id = None;
         }
-
-        Ok(())
     } 
 }
 
-impl<'server> Handler for Client<'server>
+pub struct Client
 {
-    fn on_close(&mut self, _: ws::CloseCode, _: &str) 
+    sender: Sender,
+    room_id: Option<String>
+}
+
+impl Client
+{
+    pub fn new(sender: Sender) -> Client
     {
-        if let Err(error) = self.handle_leave_room() 
-        {
-            println!("Failed to leave room: {}", error);    
-        }
+        Client { sender, room_id: None }
     }
 
-    fn on_message(&mut self, message: Message) -> Result<()> 
+    fn handle_create_room(&mut self, server: &RwLock<Server>, size_option: Option<usize>) -> Result<(), TrySendError<Message>>
+    {
+        if let Ok(mut server) = server.write() 
+        {
+            if server.rooms.iter().any(|(_, room)| room.senders.iter().any(|sender| sender.same_receiver(&self.sender))) 
+            {
+                return Ok(());
+            }
+
+            let size = size_option.unwrap_or(Room::DEFAULT_ROOM_SIZE);
+            if size == Room::MIN_ROOM_SIZE || size >= Room::MAX_ROOM_SIZE
+            {
+                return self.sender.send_error_packet("The room size is not valid".to_string());
+            }
+
+            let room_id = Uuid::new_v4().to_string();
+            self.room_id = Some(room_id.clone());
+
+            if server.rooms.contains_key(&room_id)
+            {
+                return self.sender.send_error_packet("A room with that identifier already exists.".to_string());
+            }
+
+            let mut room = Room::new(size);
+            room.senders.push(self.sender.clone());
+            server.rooms.insert(room_id.clone(), room);
+            
+            return self.sender.send_packet(ServerPacket::Create { id: room_id })
+        }
+
+        Ok(())
+    }
+
+    fn handle_join_room(&mut self, server: &RwLock<Server>, room_id: String) -> Result<(), TrySendError<Message>>
+    {
+        if let Ok(mut server) = server.write() 
+        {
+            if server.rooms.iter().any(|(_, room)| room.senders.iter().any(|sender| sender.same_receiver(&self.sender))) 
+            {
+                return Ok(());
+            }
+
+            if let Some(room) = server.rooms.get_mut(&room_id)
+            {
+                if room.senders.len() >= room.size
+                {
+                    return self.sender.send_error_packet("The room is full.".to_string());
+                }
+
+                room.senders.push(self.sender.clone());
+
+                for sender in &room.senders 
+                {
+                    if sender.same_receiver(&self.sender) 
+                    {
+                        sender.send_packet(ServerPacket::Join { size: Some(room.senders.len() - 1) })?;
+                    }
+                    else 
+                    {
+                        sender.send_packet(ServerPacket::Join { size: None })?;
+                    }
+                }
+
+                self.room_id = Some(room_id);
+            }
+            else 
+            {
+                return self.sender.send_error_packet("The room does not exist.".to_string()); 
+            }
+        }
+        
+        Ok(())
+        
+    }
+
+    fn handle_leave_room(&mut self, server: &RwLock<Server>) -> Result<(), TrySendError<Message>>
+    {
+        if let Ok(mut server) = server.write() 
+        {
+            if let Some(room_id) = &self.room_id
+            {
+                if let Some(room) = server.rooms.get_mut(room_id)
+                {
+                    if let Some(index) = room.senders.iter().position(|sender| sender.same_receiver(&self.sender))
+                    {
+                        room.senders.remove(index);
+
+                        for sender in &room.senders
+                        {
+                            sender.send_packet(ServerPacket::Leave { index })?;
+                        }
+                    }
+
+                    if room.senders.is_empty()
+                    {
+                        server.rooms.remove(room_id);
+                    }
+                }
+
+                self.room_id = None;
+            }
+        }
+
+        Ok(())
+    }
+
+    fn handle_message(&mut self, server: &RwLock<Server>, message: Message) -> Result<(), TrySendError<Message>>
     {
         if message.is_text() 
         {
@@ -220,46 +251,47 @@ impl<'server> Handler for Client<'server>
                 {
                     match packet 
                     {
-                        ReceivePacket::Create { size } => return self.handle_create_room(size),
-                        ReceivePacket::Join { id } => return self.handle_join_room(id),
-                        ReceivePacket::Leave => return self.handle_leave_room(),
+                        ClientPacket::Create { size } => return self.handle_create_room(server, size),
+                        ClientPacket::Join { id } => return self.handle_join_room(server, id),
+                        ClientPacket::Leave => return self.handle_leave_room(server),
                     }
                 }
             }
         }
         else if message.is_binary()
         {
-            let server = self.server.borrow();
-
-            if let Some(room_id) = &self.room_id
+            if let Ok(server) = server.read() 
             {
-                if let Some(room) = server.rooms.get(room_id) 
+                if let Some(room_id) = &self.room_id
                 {
-                    if let Some(index) = room.senders.iter().position(|sender| *sender == self.sender)
+                    if let Some(room) = server.rooms.get(room_id) 
                     {
-                        let mut data = message.into_data();
-
-                        if !data.is_empty()
+                        if let Some(index) = room.senders.iter().position(|sender| sender.same_receiver(&self.sender))
                         {
-                            let source = u8::try_from(index).unwrap();
-                            let destination = usize::from(data[0]);
-                            
-                            data[0] = source;
-
-                            if destination < room.senders.len()
+                            let mut data = message.into_data();
+    
+                            if !data.is_empty()
                             {
-                                return room.senders[destination].send(data);
-                            }
-                            else if destination == usize::from(u8::MAX)
-                            {
-                                for sender in &room.senders 
-                                {   
-                                    if *sender == self.sender 
-                                    {
-                                        continue;
+                                let source = u8::try_from(index).unwrap();
+                                let destination = usize::from(data[0]);
+                                
+                                data[0] = source;
+    
+                                if destination < room.senders.len()
+                                {
+                                    return room.senders[destination].unbounded_send(Message::Binary(data));
+                                }
+                                else if destination == usize::from(u8::MAX)
+                                {
+                                    for sender in &room.senders 
+                                    {   
+                                        if sender.same_receiver(&self.sender)
+                                        {
+                                            continue;
+                                        }
+                
+                                        sender.unbounded_send(Message::Binary(data.clone()))?;                            
                                     }
-            
-                                    sender.send(data.clone())?;                            
                                 }
                             }
                         }
@@ -269,5 +301,10 @@ impl<'server> Handler for Client<'server>
         }
 
         Ok(())
-    } 
+    }
+   
+    fn handle_close(&mut self, server: &RwLock<Server>) -> Result<(), TrySendError<Message>>
+    {
+        self.handle_leave_room(server)
+    }
 }

@@ -1,26 +1,28 @@
-use ws::{Builder, Settings};
+use tokio::net::{TcpListener};
 use std::{env};
 
 mod relay;
 mod tests;
 
-fn main() 
+#[tokio::main]
+async fn main()
 {
     let address = env::args().nth(1).unwrap_or("0.0.0.0".to_string());
     let port = env::args().nth(2).unwrap_or("1234".to_string());
 
-    println!("Listening on {}:{}", address, port);
+    if let Ok(listener) = TcpListener::bind(&format!("{}:{}", address, port)).await 
+    {
+        println!("Listening on: {}:{}", address, port);
+        
+        let server = relay::Server::new();
 
-    let server = relay::Server::new();
-    let ws = Builder::new()
-        .with_settings(Settings {
-            max_connections: 10000,
-            tcp_nodelay: true,
-            ..Settings::default()
-        })
-        .build(|sender| relay::Client::new(&server, sender))
-        .expect("Failed to build WebSocket server.");
-
-    ws.listen(format!("{}:{}", address, port))
-      .expect("Failed to start WebSocket server.");
+        while let Ok((tcp_stream, _)) = listener.accept().await 
+        {
+            tokio::spawn( relay::Server::handle_connection(server.clone(), tcp_stream));
+        }
+    }
+    else 
+    {
+        println!("Failed to listen on: {}:{}", address, port);
+    }
 }
