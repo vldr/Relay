@@ -1,8 +1,9 @@
 use std::{collections::HashMap, sync::{RwLock, Arc}};
-use futures_util::{future, pin_mut, stream::TryStreamExt, StreamExt};
+use futures_util::{pin_mut, future, stream::TryStreamExt, StreamExt};
 use futures_channel::mpsc::{UnboundedSender, TrySendError};
+use tungstenite::{handshake::server::{Request, Response}, http::{StatusCode, Uri}};
 use tokio_tungstenite::tungstenite::protocol::{Message};
-use tokio::{net::TcpStream};
+use tokio::net::{TcpStream};
 use serde::{Deserialize, Serialize};
 use uuid::{Uuid};
 
@@ -90,9 +91,69 @@ impl Server
         )
     }
 
-    pub async fn handle_connection(server: Arc<RwLock<Server>>, tcp_stream: TcpStream) 
+    pub async fn handle_connection(tcp_stream: TcpStream, server: Arc<RwLock<Server>>, host: String) 
     {
-        if let Ok(websocket_stream) = tokio_tungstenite::accept_async(tcp_stream).await 
+        let callback = |request: &Request, response: Response| 
+        {
+            if host.is_empty()
+            {
+                return Ok(response);
+            }
+
+            let Some(header_value) = request.headers().get("Origin") else
+            {
+                let response = Response::builder()
+                    .status(StatusCode::BAD_REQUEST)
+                    .body(None)
+                    .unwrap();
+                
+                return Err(response);
+            };
+
+            let Ok(origin) = header_value.to_str() else 
+            {
+                let response = Response::builder()
+                    .status(StatusCode::BAD_REQUEST)
+                    .body(None)
+                    .unwrap();
+                
+                return Err(response);
+            };
+
+            let Ok(origin_uri) = origin.parse::<Uri>() else 
+            {
+                let response = Response::builder()
+                    .status(StatusCode::BAD_REQUEST)
+                    .body(None)
+                    .unwrap();
+                
+                return Err(response);
+            };
+
+            let Some(origin_host) = origin_uri.host() else 
+            {
+                let response = Response::builder()
+                    .status(StatusCode::BAD_REQUEST)
+                    .body(None)
+                    .unwrap();
+            
+                return Err(response);
+            };
+
+            if origin_host != host && !origin_host.ends_with(format!(".{}", host).as_str()) 
+            {
+                let response = Response::builder()
+                    .status(StatusCode::FORBIDDEN)
+                    .body(None)
+                    .unwrap();
+                
+                return Err(response);
+            }
+
+            Ok(response)
+        };
+
+        if let Ok(websocket_stream) = tokio_tungstenite::accept_hdr_async(tcp_stream, callback).await 
         {
             let (sender, receiver) = futures_channel::mpsc::unbounded();
             let (outgoing, incoming) = websocket_stream.split();

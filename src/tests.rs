@@ -4,8 +4,8 @@ mod tests
     use crate::relay::{Server, ResponsePacket, RequestPacket};
 
     use std::net::{SocketAddr};
-    use tokio::{net::{TcpListener}};
-    use tungstenite::{Message, connect};
+    use tokio::net::{TcpListener};
+    use tungstenite::{connect, Message, client::IntoClientRequest, http::HeaderValue};
 
     macro_rules! create_socket {
         ($value:expr) => {
@@ -61,7 +61,7 @@ mod tests
     ///
     /// Starts up a test server and returns the address to the server.
     /// 
-    async fn setup() -> SocketAddr
+    async fn setup(host: Option<String>) -> SocketAddr
     {
         let listener = TcpListener::bind("127.0.0.1:0").await
             .expect("Failed to bind");
@@ -70,14 +70,89 @@ mod tests
         let socket_addr = listener.local_addr().unwrap();
 
         tokio::spawn(async move    
-        {
+        { 
             while let Ok((tcp_stream, _)) = listener.accept().await 
             {
-                tokio::spawn(Server::handle_connection(server.clone(), tcp_stream));
+                tokio::spawn(
+                    Server::handle_connection(tcp_stream, server.clone(), host.clone().unwrap_or(String::new()))
+                );
             }
         });
 
         return socket_addr
+    }
+
+    ///
+    /// Test origin header restrictions.
+    /// 
+    #[tokio::test(flavor = "multi_thread")]
+    async fn origin() 
+    {
+        //
+        // Setup test.
+        //
+
+        let socket_addr = setup(Some(String::from("example.com"))).await;
+
+        //
+        // Test no origin header.
+        //
+
+        assert!(connect(format!("ws://{}", socket_addr)).is_err());
+
+        //
+        // Test empty origin header.
+        //
+
+        let mut request = format!("ws://{}", socket_addr).into_client_request().unwrap();
+        request.headers_mut().insert("Origin", HeaderValue::from_static(""));
+
+        assert!(connect(request).is_err());
+
+        //
+        // Test invalid origin header value.
+        //
+
+        let mut request = format!("ws://{}", socket_addr).into_client_request().unwrap();
+        request.headers_mut().insert("Origin", HeaderValue::from_static("null"));
+
+        assert!(connect(request).is_err());
+
+        //
+        // Test non-matching root host.
+        //
+
+        let mut request = format!("ws://{}", socket_addr).into_client_request().unwrap();
+        request.headers_mut().insert("Origin", HeaderValue::from_static(".com"));
+
+        assert!(connect(request).is_err());
+
+        //
+        // Test non-matching root host.
+        //
+
+        let mut request = format!("ws://{}", socket_addr).into_client_request().unwrap();
+        request.headers_mut().insert("Origin", HeaderValue::from_static("not-example.com"));
+
+        assert!(connect(request).is_err());
+
+        //
+        // Test matching root host.
+        //
+
+        let mut request = format!("ws://{}", socket_addr).into_client_request().unwrap();
+        request.headers_mut().insert("Origin", HeaderValue::from_static("example.com"));
+
+        assert!(connect(request).is_ok());
+
+        //
+        // Test matching subdomain host.
+        //
+
+        let mut request = format!("ws://{}", socket_addr).into_client_request().unwrap();
+        request.headers_mut().insert("Origin", HeaderValue::from_static("subdomain.example.com"));
+
+        assert!(connect(request).is_ok());
     }
 
     ///
@@ -90,7 +165,7 @@ mod tests
         // Setup test.
         //
 
-        let socket_addr = setup().await;
+        let socket_addr = setup(None).await;
 
         //
         // Test creating an invalid sized room.
@@ -181,7 +256,7 @@ mod tests
         // Setup test.
         //
 
-        let socket_addr = setup().await;
+        let socket_addr = setup(None).await;
 
         //
         // Create four sockets, two sockets per room.
@@ -295,7 +370,7 @@ mod tests
         // Setup test.
         //
 
-        let socket_addr = setup().await;
+        let socket_addr = setup(None).await;
 
         //
         // Create N clients, the first client creates a room, the rest join the room.
@@ -434,7 +509,7 @@ mod tests
         // Setup test.
         //
 
-        let socket_addr = setup().await;
+        let socket_addr = setup(None).await;
 
         //
         // Perform the test by either closing the connection or leaving the room.

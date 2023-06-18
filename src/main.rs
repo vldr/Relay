@@ -8,17 +8,20 @@ mod tests;
 async fn main()
 {
     let address = env::args().nth(1).unwrap_or("0.0.0.0".to_string());
-    let port = env::args().nth(2).unwrap_or("1234".to_string());
+    let port = env::args().nth(2).unwrap_or("0".to_string());
+    let host = env::args().nth(3).unwrap_or("".to_string());
+
+    let server = relay::Server::new();
 
     if let Ok(listener) = TcpListener::bind(&format!("{}:{}", address, port)).await 
     {
-        println!("Listening on: {}:{}", address, port);
+        println!("Listening on: {}", listener.local_addr().unwrap());
         
-        let server = relay::Server::new();
-
         while let Ok((tcp_stream, _)) = listener.accept().await 
         {
-            tokio::spawn( relay::Server::handle_connection(server.clone(), tcp_stream));
+            tokio::spawn(
+                relay::Server::handle_connection(tcp_stream, server.clone(), host.clone())
+            );
         }
     }
     else 

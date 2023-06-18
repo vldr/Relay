@@ -31,10 +31,13 @@ To get started, you can either [build](#building) or download the precompiled bi
 
 The following are the command-line arguments for the application:
 
-```relay <IP> <PORT>```
+```relay <IP> <PORT> <HOST>```
 
 - `<IP>` is the IP address that should be bound to, for example: `127.0.0.1`
-- `<PORT>` is the port that should be bound to, for example: `1234`
+- `<PORT>` is the port that should be bound to, for example: `8080`
+- `<HOST>` is the domain suffix of the [origin](https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Origin) request header.
+    - For example, `example.com` will accept requests from `example.com`, `a.example.com`, `a.b.example.com` and reject requests that do not match the suffix.
+    - If left blank, then the origin header is not checked, and requests from any origin are accepted.
 
 # Protocol
 
