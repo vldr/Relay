@@ -2,3 +2,6 @@
 	path = examples/cubic
 	url = https://github.com/vldr/Cubic
 	branch = master
+[submodule "examples/share"]
+	path = examples/share
+	url = https://github.com/vldr/Share
