@@ -5,3 +5,4 @@
 [submodule "examples/share"]
 	path = examples/share
 	url = https://github.com/vldr/Share
+	branch = master

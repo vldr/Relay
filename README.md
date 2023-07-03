@@ -260,10 +260,13 @@ The data region contains *N* user-defined bytes, where *N* ≥ 0.
 # Examples
 
 [Chat](examples/chat)  
-A simple chat application that shows how text messages can be sent between clients.
+A simple chat application.
 
-[Cubic](https://github.com/vldr/Cubic/blob/master/Source/Network.cpp)  
+[Cubic](https://github.com/vldr/Cubic)  
 A multiplayer WebGL voxel sandbox game.
+
+[Share](https://github.com/vldr/Share)  
+A real-time, peer-to-peer file transfer platform. 
 
 # Building
 **Note:** The following instructions assume that you are in a terminal (bash, cmd, etc).
