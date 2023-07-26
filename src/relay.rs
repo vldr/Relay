@@ -1,4 +1,4 @@
-use futures_channel::mpsc::{TrySendError, UnboundedSender};
+use flume::{Sender, SendError};
 use futures_util::{future, pin_mut, stream::TryStreamExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -13,7 +13,6 @@ use tungstenite::{
 };
 use uuid::Uuid;
 
-type Sender = UnboundedSender<Message>;
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
@@ -42,18 +41,18 @@ pub enum ResponsePacket {
 }
 
 trait PacketSender {
-    fn send_packet(&self, packet: ResponsePacket) -> Result<(), TrySendError<Message>>;
-    fn send_error_packet(&self, message: String) -> Result<(), TrySendError<Message>>;
+    fn send_packet(&self, packet: ResponsePacket) -> Result<(), SendError<Message>>;
+    fn send_error_packet(&self, message: String) -> Result<(), SendError<Message>>;
 }
 
-impl PacketSender for Sender {
-    fn send_packet(&self, packet: ResponsePacket) -> Result<(), TrySendError<Message>> {
+impl PacketSender for Sender<Message> {
+    fn send_packet(&self, packet: ResponsePacket) -> Result<(), SendError<Message>> {
         let serialized_packet = serde_json::to_string(&packet).unwrap();
 
-        self.unbounded_send(Message::Text(serialized_packet))
+        self.send(Message::Text(serialized_packet))
     }
 
-    fn send_error_packet(&self, message: String) -> Result<(), TrySendError<Message>> {
+    fn send_error_packet(&self, message: String) -> Result<(), SendError<Message>> {
         let error_packet = ResponsePacket::Error { message };
 
         self.send_packet(error_packet)
@@ -62,7 +61,7 @@ impl PacketSender for Sender {
 
 struct Room {
     size: usize,
-    senders: Vec<Sender>,
+    senders: Vec<Sender<Message>>,
 }
 
 impl Room {
@@ -150,7 +149,7 @@ impl Server {
         if let Ok(websocket_stream) =
             tokio_tungstenite::accept_hdr_async(tcp_stream, callback).await
         {
-            let (sender, receiver) = futures_channel::mpsc::unbounded();
+            let (sender, receiver) = flume::unbounded();
             let (outgoing, incoming) = websocket_stream.split();
 
             let mut client = Client::new(sender.clone());
@@ -163,7 +162,7 @@ impl Server {
                 future::ok(())
             });
 
-            let outgoing_handler = receiver.map(Ok).forward(outgoing);
+            let outgoing_handler = receiver.stream().map(Ok).forward(outgoing);
 
             pin_mut!(incoming_handler, outgoing_handler);
             future::select(incoming_handler, outgoing_handler).await;
@@ -176,29 +175,25 @@ impl Server {
 }
 
 pub struct Client {
-    sender: Sender,
+    sender: Sender<Message>,
     room_id: Option<String>,
 }
 
 impl Client {
-    pub fn new(sender: Sender) -> Client {
+    pub fn new(sender: Sender<Message>) -> Client {
         Client {
             sender,
             room_id: None,
         }
     }
 
-    fn handle_create_room(
-        &mut self,
-        server: &RwLock<Server>,
-        size_option: Option<usize>,
-    ) -> Result<(), TrySendError<Message>> {
+    fn handle_create_room(&mut self, server: &RwLock<Server>, size_option: Option<usize>) -> Result<(), SendError<Message>> {
         let mut server = server.write().unwrap();
 
         if server.rooms.iter().any(|(_, room)| {
             room.senders
                 .iter()
-                .any(|sender| sender.same_receiver(&self.sender))
+                .any(|sender| sender.same_channel(&self.sender))
         }) {
             return Ok(());
         }
@@ -227,17 +222,13 @@ impl Client {
             .send_packet(ResponsePacket::Create { id: room_id })
     }
 
-    fn handle_join_room(
-        &mut self,
-        server: &RwLock<Server>,
-        room_id: String,
-    ) -> Result<(), TrySendError<Message>> {
+    fn handle_join_room(&mut self, server: &RwLock<Server>, room_id: String) -> Result<(), SendError<Message>> {
         let mut server = server.write().unwrap();
 
         if server.rooms.iter().any(|(_, room)| {
             room.senders
                 .iter()
-                .any(|sender| sender.same_receiver(&self.sender))
+                .any(|sender| sender.same_channel(&self.sender))
         }) {
             return Ok(());
         }
@@ -255,7 +246,7 @@ impl Client {
         room.senders.push(self.sender.clone());
 
         for sender in &room.senders {
-            if sender.same_receiver(&self.sender) {
+            if sender.same_channel(&self.sender) {
                 sender.send_packet(ResponsePacket::Join {
                     size: Some(room.senders.len() - 1),
                 })?;
@@ -269,7 +260,7 @@ impl Client {
         Ok(())
     }
 
-    fn handle_leave_room(&mut self, server: &RwLock<Server>) -> Result<(), TrySendError<Message>> {
+    fn handle_leave_room(&mut self, server: &RwLock<Server>) -> Result<(), SendError<Message>> {
         let mut server = server.write().unwrap();
 
         let Some(room_id) = &self.room_id else {
@@ -280,7 +271,7 @@ impl Client {
             return Ok(());
         };
 
-        let Some(index) = room.senders.iter().position(|sender| sender.same_receiver(&self.sender)) else {
+        let Some(index) = room.senders.iter().position(|sender| sender.same_channel(&self.sender)) else {
             return Ok(());
         };
 
@@ -299,11 +290,7 @@ impl Client {
         Ok(())
     }
 
-    fn handle_message(
-        &mut self,
-        server: &RwLock<Server>,
-        message: Message,
-    ) -> Result<(), TrySendError<Message>> {
+    fn handle_message(&mut self, server: &RwLock<Server>, message: Message) -> Result<(), SendError<Message>> {
         if message.is_text() {
             let Ok(text) = message.into_text() else {
                 return Ok(())
@@ -329,7 +316,7 @@ impl Client {
                 return Ok(());
             };
 
-            let Some(index) = room.senders.iter().position(|sender| sender.same_receiver(&self.sender)) else {
+            let Some(index) = room.senders.iter().position(|sender| sender.same_channel(&self.sender)) else {
                 return Ok(());
             };
 
@@ -344,14 +331,14 @@ impl Client {
             data[0] = source;
 
             if destination < room.senders.len() {
-                return room.senders[destination].unbounded_send(Message::Binary(data));
+                return room.senders[destination].send(Message::Binary(data));
             } else if destination == usize::from(u8::MAX) {
                 for sender in &room.senders {
-                    if sender.same_receiver(&self.sender) {
+                    if sender.same_channel(&self.sender) {
                         continue;
                     }
 
-                    sender.unbounded_send(Message::Binary(data.clone()))?;
+                    sender.send(Message::Binary(data.clone()))?;
                 }
             }
         }
@@ -359,7 +346,7 @@ impl Client {
         Ok(())
     }
 
-    fn handle_close(&mut self, server: &RwLock<Server>) -> Result<(), TrySendError<Message>> {
+    fn handle_close(&mut self, server: &RwLock<Server>) -> Result<(), SendError<Message>> {
         self.handle_leave_room(server)
     }
 }
