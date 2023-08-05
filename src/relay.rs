@@ -149,7 +149,7 @@ impl Server {
         if let Ok(websocket_stream) =
             tokio_tungstenite::accept_hdr_async(tcp_stream, callback).await
         {
-            let (sender, receiver) = flume::unbounded();
+            let (sender, receiver) = flume::bounded(10000);
             let (outgoing, incoming) = websocket_stream.split();
 
             let mut client = Client::new(sender.clone());
