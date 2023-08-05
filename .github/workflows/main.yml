@@ -4,7 +4,7 @@ on:
   push:
     branches: ["master"]
     tags:
-      - '*'
+      - "*"
 
 permissions:
   contents: write
@@ -16,7 +16,7 @@ jobs:
     strategy:
       matrix:
         include:
-          - os: ubuntu-latest
+          - os: ubuntu-20.04
             artifact_name: relay
             asset_name: relay-linux-amd64
           - os: windows-latest
@@ -33,13 +33,13 @@ jobs:
         uses: ATiltedTree/setup-rust@v1
         with:
           rust-version: stable
-        
+
       - name: Build
         run: cargo build --release
 
       - name: Test
         run: cargo test
-      
+
       - name: Publish
         uses: svenstaro/upload-release-action@v2
         with:
