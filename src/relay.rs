@@ -49,10 +49,7 @@ impl PacketSender for Sender<Message> {
     fn send_packet(&self, packet: ResponsePacket) -> Result<(), SendError<Message>> {
         let serialized_packet = serde_json::to_string(&packet).unwrap();
 
-        let cloned_sender = self.clone();
-        tokio::task::spawn_blocking(move || cloned_sender.send(Message::Text(serialized_packet)));
-
-        return Ok(());
+        self.send(Message::Text(serialized_packet))
     }
 
     fn send_error_packet(&self, message: String) -> Result<(), SendError<Message>> {
@@ -152,7 +149,7 @@ impl Server {
         if let Ok(websocket_stream) =
             tokio_tungstenite::accept_hdr_async(tcp_stream, callback).await
         {
-            let (sender, receiver) = flume::bounded(0);
+            let (sender, receiver) = flume::unbounded();
             let (outgoing, incoming) = websocket_stream.split();
 
             let mut client = Client::new(sender.clone());
@@ -334,9 +331,7 @@ impl Client {
             data[0] = source;
 
             if destination < room.senders.len() {
-                let cloned_sender = room.senders[destination].clone();
-
-                tokio::task::spawn_blocking(move || cloned_sender.send(Message::Binary(data)));
+                return room.senders[destination].send(Message::Binary(data));
             } else if destination == usize::from(u8::MAX) {
                 for sender in &room.senders {
                     if sender.same_channel(&self.sender) {
