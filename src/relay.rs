@@ -1,3 +1,4 @@
+use async_trait::async_trait;
 use futures_util::{stream::SplitSink, StreamExt, SinkExt};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -39,8 +40,6 @@ pub enum ResponsePacket {
         message: String,
     },
 }
-
-use async_trait::async_trait;
 
 #[async_trait]
 trait PacketSender {
