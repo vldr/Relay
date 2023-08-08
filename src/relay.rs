@@ -44,20 +44,27 @@ use async_trait::async_trait;
 
 #[async_trait]
 trait PacketSender {
-    async fn send_packet(&self, packet: ResponsePacket) -> Result<(), tungstenite::Error>;
-    async fn send_error_packet(&self, message: String) -> Result<(), tungstenite::Error>;
+    async fn send(&self, message: Message);
+    async fn send_packet(&self, packet: ResponsePacket);
+    async fn send_error_packet(&self, message: String);
 }
 
 #[async_trait]
 impl PacketSender for Sender {
-    async fn send_packet(&self, packet: ResponsePacket) -> Result<(), tungstenite::Error> {
-        let serialized_packet = serde_json::to_string(&packet).unwrap();
+    async fn send(&self, message: Message) {
         let mut sender = self.lock().await;
-
-        sender.send(Message::Text(serialized_packet)).await
+        if let Err(error) = sender.send(message).await {
+            println!("Failed to send: {}", error);
+        }
     }
 
-    async fn send_error_packet(&self, message: String) -> Result<(), tungstenite::Error> {
+    async fn send_packet(&self, packet: ResponsePacket){
+        let serialized_packet = serde_json::to_string(&packet).unwrap();
+
+        self.send(Message::Text(serialized_packet)).await;
+    }
+
+    async fn send_error_packet(&self, message: String) {
         let error_packet = ResponsePacket::Error { message };
 
         self.send_packet(error_packet).await
@@ -160,16 +167,13 @@ impl Server {
             let mut client = Client::new(sender.clone());
 
             while let Some(message) = receiver.next().await {
-                let message = message.unwrap();
-
-                if let Err(error) = client.handle_message(&server, message).await {
-                    println!("Failed to handle message: {}", error);
+                match message {
+                    Ok(message) => client.handle_message(&server, message).await,
+                    Err(error) => println!("Failed to read message: {}", error),
                 }
             }
 
-            if let Err(error) = client.handle_close(&server).await {
-                println!("Failed to handle close: {}", error);
-            }
+            client.handle_close(&server).await
         }
     }
 }
@@ -187,7 +191,7 @@ impl Client {
         }
     }
 
-    async fn handle_create_room(&mut self, server: &RwLock<Server>, size_option: Option<usize>) -> Result<(), tungstenite::Error> {
+    async fn handle_create_room(&mut self, server: &RwLock<Server>, size_option: Option<usize>) {
         let mut server = server.write().await;
 
         if server.rooms.iter().any(|(_, room)| {
@@ -195,7 +199,7 @@ impl Client {
                 .iter()
                 .any(|sender| Arc::ptr_eq(sender, &self.sender))
         }) {
-            return Ok(());
+            return;
         }
 
         let size = size_option.unwrap_or(Room::DEFAULT_ROOM_SIZE);
@@ -222,7 +226,7 @@ impl Client {
             .send_packet(ResponsePacket::Create { id: room_id }).await
     }
 
-    async fn handle_join_room(&mut self, server: &RwLock<Server>, room_id: String) -> Result<(), tungstenite::Error> {
+    async fn handle_join_room(&mut self, server: &RwLock<Server>, room_id: String) {
         let mut server = server.write().await;
 
         if server.rooms.iter().any(|(_, room)| {
@@ -230,7 +234,7 @@ impl Client {
                 .iter()
                 .any(|sender| Arc::ptr_eq(sender, &self.sender))
         }) {
-            return Ok(());
+            return;
         }
 
         let Some(room) = server.rooms.get_mut(&room_id) else {
@@ -247,38 +251,34 @@ impl Client {
 
         for sender in &room.senders {
             if Arc::ptr_eq(sender, &self.sender) {
-                sender.send_packet(ResponsePacket::Join {
-                    size: Some(room.senders.len() - 1),
-                }).await?;
+                sender.send_packet(ResponsePacket::Join { size: Some(room.senders.len() - 1) }).await;
             } else {
-                sender.send_packet(ResponsePacket::Join { size: None }).await?;
+                sender.send_packet(ResponsePacket::Join { size: None }).await;
             }
         }
 
         self.room_id = Some(room_id);
-
-        Ok(())
     }
 
-    async fn handle_leave_room(&mut self, server: &RwLock<Server>) -> Result<(), tungstenite::Error> {
+    async fn handle_leave_room(&mut self, server: &RwLock<Server>) {
         let mut server = server.write().await;
 
         let Some(room_id) = &self.room_id else {
-            return Ok(());
+            return;
         };
 
         let Some(room) = server.rooms.get_mut(room_id) else {
-            return Ok(());
+            return;
         };
 
         let Some(index) = room.senders.iter().position(|sender| Arc::ptr_eq(sender, &self.sender)) else {
-            return Ok(());
+            return;
         };
 
         room.senders.remove(index);
 
         for sender in &room.senders {
-            sender.send_packet(ResponsePacket::Leave { index }).await?;
+            sender.send_packet(ResponsePacket::Leave { index }).await;
         }
 
         if room.senders.is_empty() {
@@ -286,18 +286,16 @@ impl Client {
         }
 
         self.room_id = None;
-
-        Ok(())
     }
 
-    async fn handle_message(&mut self, server: &RwLock<Server>, message: Message) -> Result<(), tungstenite::Error> {
+    async fn handle_message(&mut self, server: &RwLock<Server>, message: Message) {
         if message.is_text() {
             let Ok(text) = message.into_text() else {
-                return Ok(())
+                return
             };
 
             let Ok(packet) = serde_json::from_str(&text) else {
-                return Ok(())
+                return
             };
 
             return match packet {
@@ -309,20 +307,20 @@ impl Client {
             let server = server.read().await;
 
             let Some(room_id) = &self.room_id else {
-                return Ok(());
+                return;
             };
 
             let Some(room) = server.rooms.get(room_id) else {
-                return Ok(());
+                return;
             };
 
             let Some(index) = room.senders.iter().position(|sender| Arc::ptr_eq(sender, &self.sender)) else {
-                return Ok(());
+                return;
             };
 
             let mut data = message.into_data();
             if data.is_empty() {
-                return Ok(());
+                return;
             }
 
             let source = u8::try_from(index).unwrap();
@@ -331,25 +329,20 @@ impl Client {
             data[0] = source;
 
             if destination < room.senders.len() {
-                let mut sender = room.senders[destination].lock().await;
-
-                return sender.send(Message::Binary(data)).await;
+                return room.senders[destination].send(Message::Binary(data)).await;
             } else if destination == usize::from(u8::MAX) {
                 for sender in &room.senders {
                     if Arc::ptr_eq(sender, &self.sender) {
                         continue;
                     }
 
-                    let mut sender = sender.lock().await;
-                    sender.send(Message::Binary(data.clone())).await?;
+                    sender.send(Message::Binary(data.clone())).await;
                 }
             }
         }
-
-        Ok(())
     }
 
-    async fn handle_close(&mut self, server: &RwLock<Server>) -> Result<(), tungstenite::Error> {
+    async fn handle_close(&mut self, server: &RwLock<Server>) {
         self.handle_leave_room(server).await
     }
 }
