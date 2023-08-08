@@ -1,18 +1,18 @@
-use flume::{Sender, SendError};
-use futures_util::{future, pin_mut, stream::TryStreamExt, StreamExt};
+use futures_util::{stream::SplitSink, StreamExt, SinkExt};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
-    sync::{Arc, RwLock},
+    sync::Arc,
 };
-use tokio::net::TcpStream;
-use tokio_tungstenite::tungstenite::protocol::Message;
+use tokio::{net::TcpStream, sync::Mutex, sync::RwLock};
+use tokio_tungstenite::{tungstenite::protocol::Message, WebSocketStream};
 use tungstenite::{
     handshake::server::{Request, Response},
     http::{StatusCode, Uri},
 };
 use uuid::Uuid;
 
+type Sender = Arc<Mutex<SplitSink<WebSocketStream<TcpStream>, Message>>>;
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
@@ -40,28 +40,33 @@ pub enum ResponsePacket {
     },
 }
 
+use async_trait::async_trait;
+
+#[async_trait]
 trait PacketSender {
-    fn send_packet(&self, packet: ResponsePacket) -> Result<(), SendError<Message>>;
-    fn send_error_packet(&self, message: String) -> Result<(), SendError<Message>>;
+    async fn send_packet(&self, packet: ResponsePacket) -> Result<(), tungstenite::Error>;
+    async fn send_error_packet(&self, message: String) -> Result<(), tungstenite::Error>;
 }
 
-impl PacketSender for Sender<Message> {
-    fn send_packet(&self, packet: ResponsePacket) -> Result<(), SendError<Message>> {
+#[async_trait]
+impl PacketSender for Sender {
+    async fn send_packet(&self, packet: ResponsePacket) -> Result<(), tungstenite::Error> {
         let serialized_packet = serde_json::to_string(&packet).unwrap();
+        let mut sender = self.lock().await;
 
-        self.send(Message::Text(serialized_packet))
+        sender.send(Message::Text(serialized_packet)).await
     }
 
-    fn send_error_packet(&self, message: String) -> Result<(), SendError<Message>> {
+    async fn send_error_packet(&self, message: String) -> Result<(), tungstenite::Error> {
         let error_packet = ResponsePacket::Error { message };
 
-        self.send_packet(error_packet)
+        self.send_packet(error_packet).await
     }
 }
 
 struct Room {
     size: usize,
-    senders: Vec<Sender<Message>>,
+    senders: Vec<Sender>,
 }
 
 impl Room {
@@ -149,25 +154,20 @@ impl Server {
         if let Ok(websocket_stream) =
             tokio_tungstenite::accept_hdr_async(tcp_stream, callback).await
         {
-            let (sender, receiver) = flume::unbounded();
-            let (outgoing, incoming) = websocket_stream.split();
+            let (sender, mut receiver) = websocket_stream.split();
+            let sender = Arc::new(Mutex::new(sender));
 
             let mut client = Client::new(sender.clone());
 
-            let incoming_handler = incoming.try_for_each(|message| {
-                if let Err(error) = client.handle_message(&server, message) {
+            while let Some(message) = receiver.next().await {
+                let message = message.unwrap();
+
+                if let Err(error) = client.handle_message(&server, message).await {
                     println!("Failed to handle message: {}", error);
                 }
+            }
 
-                future::ok(())
-            });
-
-            let outgoing_handler = receiver.stream().map(Ok).forward(outgoing);
-
-            pin_mut!(incoming_handler, outgoing_handler);
-            future::select(incoming_handler, outgoing_handler).await;
-
-            if let Err(error) = client.handle_close(&server) {
+            if let Err(error) = client.handle_close(&server).await {
                 println!("Failed to handle close: {}", error);
             }
         }
@@ -175,25 +175,25 @@ impl Server {
 }
 
 pub struct Client {
-    sender: Sender<Message>,
+    sender: Sender,
     room_id: Option<String>,
 }
 
 impl Client {
-    pub fn new(sender: Sender<Message>) -> Client {
+    pub fn new(sender: Sender) -> Client {
         Client {
             sender,
             room_id: None,
         }
     }
 
-    fn handle_create_room(&mut self, server: &RwLock<Server>, size_option: Option<usize>) -> Result<(), SendError<Message>> {
-        let mut server = server.write().unwrap();
+    async fn handle_create_room(&mut self, server: &RwLock<Server>, size_option: Option<usize>) -> Result<(), tungstenite::Error> {
+        let mut server = server.write().await;
 
         if server.rooms.iter().any(|(_, room)| {
             room.senders
                 .iter()
-                .any(|sender| sender.same_channel(&self.sender))
+                .any(|sender| Arc::ptr_eq(sender, &self.sender))
         }) {
             return Ok(());
         }
@@ -202,14 +202,14 @@ impl Client {
         if size == Room::MIN_ROOM_SIZE || size >= Room::MAX_ROOM_SIZE {
             return self
                 .sender
-                .send_error_packet("The room size is not valid".to_string());
+                .send_error_packet("The room size is not valid".to_string()).await;
         }
 
         let room_id = Uuid::new_v4().to_string();
         if server.rooms.contains_key(&room_id) {
             return self
                 .sender
-                .send_error_packet("A room with that identifier already exists.".to_string());
+                .send_error_packet("A room with that identifier already exists.".to_string()).await;
         }
 
         let mut room = Room::new(size);
@@ -219,39 +219,39 @@ impl Client {
 
         self.room_id = Some(room_id.clone());
         self.sender
-            .send_packet(ResponsePacket::Create { id: room_id })
+            .send_packet(ResponsePacket::Create { id: room_id }).await
     }
 
-    fn handle_join_room(&mut self, server: &RwLock<Server>, room_id: String) -> Result<(), SendError<Message>> {
-        let mut server = server.write().unwrap();
+    async fn handle_join_room(&mut self, server: &RwLock<Server>, room_id: String) -> Result<(), tungstenite::Error> {
+        let mut server = server.write().await;
 
         if server.rooms.iter().any(|(_, room)| {
             room.senders
                 .iter()
-                .any(|sender| sender.same_channel(&self.sender))
+                .any(|sender| Arc::ptr_eq(sender, &self.sender))
         }) {
             return Ok(());
         }
 
         let Some(room) = server.rooms.get_mut(&room_id) else {
-            return self.sender.send_error_packet("The room does not exist.".to_string()); 
+            return self.sender.send_error_packet("The room does not exist.".to_string()).await; 
         };
 
         if room.senders.len() >= room.size {
             return self
                 .sender
-                .send_error_packet("The room is full.".to_string());
+                .send_error_packet("The room is full.".to_string()).await;
         }
 
         room.senders.push(self.sender.clone());
 
         for sender in &room.senders {
-            if sender.same_channel(&self.sender) {
+            if Arc::ptr_eq(sender, &self.sender) {
                 sender.send_packet(ResponsePacket::Join {
                     size: Some(room.senders.len() - 1),
-                })?;
+                }).await?;
             } else {
-                sender.send_packet(ResponsePacket::Join { size: None })?;
+                sender.send_packet(ResponsePacket::Join { size: None }).await?;
             }
         }
 
@@ -260,8 +260,8 @@ impl Client {
         Ok(())
     }
 
-    fn handle_leave_room(&mut self, server: &RwLock<Server>) -> Result<(), SendError<Message>> {
-        let mut server = server.write().unwrap();
+    async fn handle_leave_room(&mut self, server: &RwLock<Server>) -> Result<(), tungstenite::Error> {
+        let mut server = server.write().await;
 
         let Some(room_id) = &self.room_id else {
             return Ok(());
@@ -271,14 +271,14 @@ impl Client {
             return Ok(());
         };
 
-        let Some(index) = room.senders.iter().position(|sender| sender.same_channel(&self.sender)) else {
+        let Some(index) = room.senders.iter().position(|sender| Arc::ptr_eq(sender, &self.sender)) else {
             return Ok(());
         };
 
         room.senders.remove(index);
 
         for sender in &room.senders {
-            sender.send_packet(ResponsePacket::Leave { index })?;
+            sender.send_packet(ResponsePacket::Leave { index }).await?;
         }
 
         if room.senders.is_empty() {
@@ -290,7 +290,7 @@ impl Client {
         Ok(())
     }
 
-    fn handle_message(&mut self, server: &RwLock<Server>, message: Message) -> Result<(), SendError<Message>> {
+    async fn handle_message(&mut self, server: &RwLock<Server>, message: Message) -> Result<(), tungstenite::Error> {
         if message.is_text() {
             let Ok(text) = message.into_text() else {
                 return Ok(())
@@ -301,12 +301,12 @@ impl Client {
             };
 
             return match packet {
-                RequestPacket::Create { size } => self.handle_create_room(server, size),
-                RequestPacket::Join { id } => self.handle_join_room(server, id),
-                RequestPacket::Leave => self.handle_leave_room(server),
+                RequestPacket::Create { size } => self.handle_create_room(server, size).await,
+                RequestPacket::Join { id } => self.handle_join_room(server, id).await,
+                RequestPacket::Leave => self.handle_leave_room(server).await,
             };
         } else if message.is_binary() {
-            let server = server.read().unwrap();
+            let server = server.read().await;
 
             let Some(room_id) = &self.room_id else {
                 return Ok(());
@@ -316,7 +316,7 @@ impl Client {
                 return Ok(());
             };
 
-            let Some(index) = room.senders.iter().position(|sender| sender.same_channel(&self.sender)) else {
+            let Some(index) = room.senders.iter().position(|sender| Arc::ptr_eq(sender, &self.sender)) else {
                 return Ok(());
             };
 
@@ -331,14 +331,17 @@ impl Client {
             data[0] = source;
 
             if destination < room.senders.len() {
-                return room.senders[destination].send(Message::Binary(data));
+                let mut sender = room.senders[destination].lock().await;
+
+                return sender.send(Message::Binary(data)).await;
             } else if destination == usize::from(u8::MAX) {
                 for sender in &room.senders {
-                    if sender.same_channel(&self.sender) {
+                    if Arc::ptr_eq(sender, &self.sender) {
                         continue;
                     }
 
-                    sender.send(Message::Binary(data.clone()))?;
+                    let mut sender = sender.lock().await;
+                    sender.send(Message::Binary(data.clone())).await?;
                 }
             }
         }
@@ -346,7 +349,7 @@ impl Client {
         Ok(())
     }
 
-    fn handle_close(&mut self, server: &RwLock<Server>) -> Result<(), SendError<Message>> {
-        self.handle_leave_room(server)
+    async fn handle_close(&mut self, server: &RwLock<Server>) -> Result<(), tungstenite::Error> {
+        self.handle_leave_room(server).await
     }
 }
