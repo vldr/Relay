@@ -17,7 +17,7 @@ mod tests {
         ($value:expr) => {{
             $value.close(None).unwrap();
             loop {
-                if $value.read_message().is_err() {
+                if $value.read().is_err() {
                     break;
                 }
             }
@@ -26,7 +26,7 @@ mod tests {
 
     macro_rules! write_binary_message {
         ($value:expr, $value2:expr) => {
-            $value.write_message(Message::Binary($value2)).unwrap()
+            $value.send(Message::Binary($value2)).unwrap()
         };
     }
 
@@ -34,15 +34,13 @@ mod tests {
         ($value:expr, $value2:expr) => {
             let packet = $value2;
             let serialized_packet = serde_json::to_string(&packet).unwrap();
-            $value
-                .write_message(Message::Text(serialized_packet))
-                .unwrap()
+            $value.send(Message::Text(serialized_packet)).unwrap()
         };
     }
 
     macro_rules! read_message {
         ($value:expr, $pattern:pat => $extracted_value:expr) => {
-            match serde_json::from_str(&$value.read_message().unwrap().clone().into_text().unwrap())
+            match serde_json::from_str(&$value.read().unwrap().clone().into_text().unwrap())
                 .unwrap()
             {
                 $pattern => $extracted_value,
@@ -53,7 +51,7 @@ mod tests {
 
     macro_rules! read_binary_message {
         ($value:expr) => {
-            $value.read_message().unwrap().clone().into_data()
+            $value.read().unwrap().clone().into_data()
         };
     }
 
