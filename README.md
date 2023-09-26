@@ -8,12 +8,12 @@ A fast and simple WebSocket relay, built in Rust, that enables a peer-to-peer-li
 
 - [Getting Started](#getting-started)
 - [Protocol](#protocol)
-    - [Text Protocol](#text-protocol)
-        - [`create` packet](#create-packet) 
-        - [`join` packet](#join-packet) 
-        - [`leave` packet](#leave-packet) 
-        - [`error` packet](#error-packet) 
-    - [Binary Protocol](#binary-protocol)
+  - [Text Protocol](#text-protocol)
+    - [`create` packet](#create-packet)
+    - [`join` packet](#join-packet)
+    - [`leave` packet](#leave-packet)
+    - [`error` packet](#error-packet)
+  - [Binary Protocol](#binary-protocol)
 - [Examples](#examples)
 - [Building](#building)
 
@@ -31,19 +31,20 @@ To get started, you can either [build](#building) or download the precompiled bi
 
 The following are the command-line arguments for the application:
 
-```relay <IP> <PORT> <HOST>```
+`relay <IP> <PORT> <HOST>`
 
 - `<IP>` is the IP address that should be bound to, for example: `127.0.0.1`
 - `<PORT>` is the port that should be bound to, for example: `8080`
 - `<HOST>` is the domain suffix of the [origin](https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Origin) request header.
-    - For example, `example.com` will accept requests from `example.com`, `a.example.com`, `a.b.example.com` and reject requests that do not match the suffix.
-    - If left blank, then the origin header is not checked, and requests from any origin are accepted.
+  - For example, `example.com` will accept requests from `example.com`, `a.example.com`, `a.b.example.com` and reject requests that do not match the suffix.
+  - If left blank, then the origin header is not checked, and requests from any origin are accepted.
 
 # Protocol
 
 Relay uses the concept of rooms, which represent a list of clients that wish to send data between each other. A client can create a room and have other clients join the room. Once inside a room, data can be relayed.
-- To create and join rooms, we use the *text protocol*. 
-- To send data between clients, we use the *binary protocol*.
+
+- To create and join rooms, we use the _text protocol_.
+- To send data between clients, we use the _binary protocol_.
 
 The **text protocol** uses JSON to communicate between the client and the relay server to create and join rooms.
 
@@ -52,12 +53,14 @@ The **binary protocol** uses a single byte at the start of your data to indicate
 **Example:**
 
 To use the text protocol in JavaScript, you would write:
+
 ```javascript
 const webSocket = new WebSocket("<URL>");
 webSocket.send(`{"type": "create"}`);
 ```
 
 To use the binary protocol in JavaScript, you would write:
+
 ```javascript
 const webSocket = new WebSocket("<URL>");
 webSocket.send(new Uint8Array(255, 1, 2, 3));
@@ -68,6 +71,7 @@ webSocket.send(new Uint8Array(255, 1, 2, 3));
 ## Text Protocol
 
 ### `create` packet
+
 Creates a new room.
 
 **Note:** If the client fails to create a room, an "error" packet is sent as a response instead.
@@ -76,10 +80,10 @@ Creates a new room.
 
 **Request:**
 
-| Field | Type  | Description |
-|-------|------|-------------|
-| type  | `string` | The value should be "create". |
-| size (optional) | `number` | Specifies the size of the room. The minimum value is *1*, the maximum value is *254*, and the default value is *2*. |
+| Field           | Type     | Description                                                                                                         |
+| --------------- | -------- | ------------------------------------------------------------------------------------------------------------------- |
+| type            | `string` | The value should be "create".                                                                                       |
+| size (optional) | `number` | Specifies the size of the room. The minimum value is _1_, the maximum value is _254_, and the default value is _2_. |
 
 **Example:**
 
@@ -93,8 +97,8 @@ Creates a new room.
 
 ```json
 {
-    "type": "create",
-    "size": 10
+  "type": "create",
+  "size": 10
 }
 ```
 
@@ -103,7 +107,7 @@ Creates a new room.
 
 ```json
 {
-    "type": "create"
+  "type": "create"
 }
 ```
 
@@ -111,23 +115,27 @@ Creates a new room.
 </tr>
 </table>
 
-**Response:**  
+**Response:**
 
-| Field | Type  | Description |
-|-------|------|-------------|
-| type  | `string` | The value will be "create". |
-| id | `string` | The randomly generated identifier of the room, which is used to join the room by other clients. |
+| Field | Type     | Description                                                                                     |
+| ----- | -------- | ----------------------------------------------------------------------------------------------- |
+| type  | `string` | The value will be "create".                                                                     |
+| id    | `string` | The randomly generated identifier of the room, which is used to join the room by other clients. |
 
 **Example:**
+
 ```json
 {
-    "type": "create",
-    "id": "f4b087df-1e2c-4482-b434-d23b723cf6d"
+  "type": "create",
+  "id": "f4b087df-1e2c-4482-b434-d23b723cf6d"
 }
 ```
 
+---
+
 ### `join` packet
-Joins a room.  
+
+Joins a room.
 
 **Note:** If the client fails to join a room, an "error" packet is sent as a response instead.
 
@@ -135,24 +143,25 @@ Joins a room.
 
 **Request:**
 
-| Field | Type  | Description |
-|-------|------|-------------|
-| type | `string` | The value should be "join". |
-| id | `string` | The identifier of the room to join. |
+| Field | Type     | Description                         |
+| ----- | -------- | ----------------------------------- |
+| type  | `string` | The value should be "join".         |
+| id    | `string` | The identifier of the room to join. |
 
 **Example:**
+
 ```json
 {
-    "type": "join",
-    "id": "f4b087df-1e2c-4482-b434-d23b723cf6d"
+  "type": "join",
+  "id": "f4b087df-1e2c-4482-b434-d23b723cf6d"
 }
 ```
 
-**Response:**  
+**Response:**
 
-| Field | Type  | Description |
-|-------|------|-------------|
-| type | `string` | The value will be "join". |
+| Field              | Type             | Description                                                                                                                                                                                                        |
+| ------------------ | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| type               | `string`         | The value will be "join".                                                                                                                                                                                          |
 | size (conditional) | `string \| null` | **Important:** The client that sent the "join" packet will receive the number of clients that are in the room (excluding themselves). Everyone else in the room will receive the "join" packet with no size field. |
 
 **Example:**
@@ -167,8 +176,8 @@ Joins a room.
 
 ```json
 {
-    "type": "join",
-    "size": 4
+  "type": "join",
+  "size": 4
 }
 ```
 
@@ -177,7 +186,7 @@ Joins a room.
 
 ```json
 {
-    "type": "join"
+  "type": "join"
 }
 ```
 
@@ -185,41 +194,49 @@ Joins a room.
 </tr>
 </table>
 
+---
+
 ### `leave` packet
-Indicates that a client has left a room. 
+
+Indicates that a client has left a room.
 
 **Response:**
 
-| Field | Type  | Description |
-|-------|------|-------------|
-| type  | `string` | The value will be "leave". |
+| Field | Type     | Description                            |
+| ----- | -------- | -------------------------------------- |
+| type  | `string` | The value will be "leave".             |
 | index | `number` | The index of the client that has left. |
 
 **Example:**
+
 ```json
 {
-    "type": "leave",
-    "index": 0
+  "type": "leave",
+  "index": 0
 }
 ```
 
+---
+
 ### `error` packet
-Indicates that an error occurred when either joining or creating a room.  
+
+Indicates that an error occurred when either joining or creating a room.
 
 **Note:** This packet is only sent during the creation or the joining of a room. You can assume that if a user gets this packet, then they're not in a room.
 
 **Response:**
 
-| Field | Type  | Description |
-|-------|------|-------------|
-| type  | `string` | The value will be "error". |
+| Field   | Type     | Description                                |
+| ------- | -------- | ------------------------------------------ |
+| type    | `string` | The value will be "error".                 |
 | message | `string` | A human-readable explanation of the error. |
 
 **Example:**
+
 ```json
 {
-    "type": "error",
-    "message": "The room does not exist."
+  "type": "error",
+  "message": "The room does not exist."
 }
 ```
 
@@ -244,18 +261,20 @@ Indicates that an error occurred when either joining or creating a room.
     </tbody>
 </table>
 
-**Index:** 
+**Index:**
 
-When *sending*, the index byte indicates which client the packet should be sent to. 
-- A value of *255* indicates a broadcast, which means the packet will be sent to everyone in the room (excluding the sender).
-- A value between *0* and *254* indicates the index of the client that the packet will be sent to (a client can send to itself).
+When _sending_, the index byte indicates which client the packet should be sent to.
 
-When *receiving*, the index byte will contain the index of the sender of the packet.
-- A value between *0* and *254* indicates the index of the client that sent the packet.
+- A value of _255_ indicates a broadcast, which means the packet will be sent to everyone in the room (excluding the sender).
+- A value between _0_ and _254_ indicates the index of the client that the packet will be sent to (a client can send to itself).
 
-**Data:** 
+When _receiving_, the index byte will contain the index of the sender of the packet.
 
-The data region contains *N* user-defined bytes, where *N* ≥ 0.
+- A value between _0_ and _254_ indicates the index of the client that sent the packet.
+
+**Data:**
+
+The data region contains _N_ user-defined bytes, where _N_ ≥ 0.
 
 # Examples
 
@@ -266,14 +285,15 @@ A simple chat application.
 A multiplayer WebGL voxel sandbox game.
 
 [Share](https://github.com/vldr/Share)  
-A real-time, peer-to-peer file transfer platform. 
+A real-time, peer-to-peer file transfer platform.
 
 # Building
+
 **Note:** The following instructions assume that you are in a terminal (bash, cmd, etc).
 
 1. Install [Rust](https://www.rust-lang.org/learn/get-started) and [Git](https://git-scm.com/).
 2. Run `git clone https://github.com/vldr/relay`
 3. Navigate to the cloned directory.
-3. Run `cargo build --release`
+4. Run `cargo build --release`
 
 After the build process finishes, the output executable will be located in the `target/release` folder.
