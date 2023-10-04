@@ -135,7 +135,10 @@ impl Server {
             while let Some(message) = receiver.next().await {
                 match message {
                     Ok(message) => client.handle_message(&server, message).await,
-                    Err(error) => println!("Failed to read message: {}", error),
+                    Err(error) => {
+                        println!("Failed to read message: {}", error);
+                        break;
+                    },
                 }
             }
 
@@ -189,6 +192,8 @@ impl Client {
 
         let size = size_option.unwrap_or(Room::DEFAULT_ROOM_SIZE);
         if size == Room::MIN_ROOM_SIZE || size >= Room::MAX_ROOM_SIZE {
+            drop(server);
+
             return self
                 .send_error_packet(&self.sender, "The room size is not valid".to_string())
                 .await;
@@ -196,6 +201,8 @@ impl Client {
 
         let room_id = Uuid::new_v4().to_string();
         if server.rooms.contains_key(&room_id) {
+            drop(server);
+
             return self
                 .send_error_packet(
                     &self.sender,
@@ -208,8 +215,10 @@ impl Client {
         room.senders.push(self.sender.clone());
 
         server.rooms.insert(room_id.clone(), room);
-
         self.room_id = Some(room_id.clone());
+
+        drop(server);
+
         self.send_packet(&self.sender, ResponsePacket::Create { id: room_id })
             .await
     }
@@ -226,10 +235,14 @@ impl Client {
         }
 
         let Some(room) = server.rooms.get_mut(&room_id) else {
+            drop(server);
+
             return self.send_error_packet(&self.sender, "The room does not exist.".to_string()).await; 
         };
 
         if room.senders.len() >= room.size {
+            drop(server);
+
             return self
                 .send_error_packet(&self.sender, "The room is full.".to_string())
                 .await;
@@ -237,15 +250,15 @@ impl Client {
 
         room.senders.push(self.sender.clone());
 
-        for sender in &room.senders {
+        let senders = room.senders.clone();
+        let size = Some(room.senders.len() - 1);
+
+        drop(server);
+
+        for sender in &senders {
             if Arc::ptr_eq(sender, &self.sender) {
-                self.send_packet(
-                    &sender,
-                    ResponsePacket::Join {
-                        size: Some(room.senders.len() - 1),
-                    },
-                )
-                .await;
+                self.send_packet(&sender, ResponsePacket::Join { size })
+                    .await;
             } else {
                 self.send_packet(&sender, ResponsePacket::Join { size: None })
                     .await;
@@ -272,16 +285,20 @@ impl Client {
 
         room.senders.remove(index);
 
-        for sender in &room.senders {
-            self.send_packet(&sender, ResponsePacket::Leave { index })
-                .await;
-        }
+        let senders = room.senders.clone();
 
         if room.senders.is_empty() {
             server.rooms.remove(room_id);
         }
 
         self.room_id = None;
+
+        drop(server);
+
+        for sender in &senders {
+            self.send_packet(&sender, ResponsePacket::Leave { index })
+                .await;
+        }
     }
 
     async fn handle_message(&mut self, server: &RwLock<Server>, message: Message) {
@@ -325,11 +342,19 @@ impl Client {
             data[0] = source;
 
             if destination < room.senders.len() {
+                let sender = room.senders[destination].clone();
+
+                drop(server);
+
                 return self
-                    .send(&room.senders[destination], Message::Binary(data))
+                    .send(&sender, Message::Binary(data))
                     .await;
             } else if destination == usize::from(u8::MAX) {
-                for sender in &room.senders {
+                let senders = room.senders.clone();
+
+                drop(server);
+
+                for sender in &senders {
                     if Arc::ptr_eq(sender, &self.sender) {
                         continue;
                     }
