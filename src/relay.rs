@@ -99,7 +99,7 @@ impl Server {
                     .status(StatusCode::BAD_REQUEST)
                     .body(None)
                     .unwrap();
-                
+            
                 return Err(response);
             };
 
@@ -160,20 +160,20 @@ impl Client {
         }
     }
 
-    async fn send(&self, sender: &Sender, message: Message) {
+    async fn send(&self, sender: Sender, message: Message) {
         let mut sender = sender.lock().await;
         if let Err(error) = sender.send(message).await {
             println!("Failed to send: {}", error);
         }
     }
 
-    async fn send_packet(&self, sender: &Sender, packet: ResponsePacket) {
+    async fn send_packet(&self, sender: Sender, packet: ResponsePacket) {
         let serialized_packet = serde_json::to_string(&packet).unwrap();
 
         self.send(sender, Message::Text(serialized_packet)).await;
     }
 
-    async fn send_error_packet(&self, sender: &Sender, message: String) {
+    async fn send_error_packet(&self, sender: Sender, message: String) {
         let error_packet = ResponsePacket::Error { message };
 
         self.send_packet(sender, error_packet).await
@@ -195,7 +195,10 @@ impl Client {
             drop(server);
 
             return self
-                .send_error_packet(&self.sender, "The room size is not valid".to_string())
+                .send_error_packet(
+                    self.sender.clone(),
+                    "The room size is not valid".to_string(),
+                )
                 .await;
         }
 
@@ -205,7 +208,7 @@ impl Client {
 
             return self
                 .send_error_packet(
-                    &self.sender,
+                    self.sender.clone(),
                     "A room with that identifier already exists.".to_string(),
                 )
                 .await;
@@ -219,7 +222,7 @@ impl Client {
 
         drop(server);
 
-        self.send_packet(&self.sender, ResponsePacket::Create { id: room_id })
+        self.send_packet(self.sender.clone(), ResponsePacket::Create { id: room_id })
             .await
     }
 
@@ -237,46 +240,46 @@ impl Client {
         let Some(room) = server.rooms.get_mut(&room_id) else {
             drop(server);
 
-            return self.send_error_packet(&self.sender, "The room does not exist.".to_string()).await; 
+            return self.send_error_packet(self.sender.clone(), "The room does not exist.".to_string()).await; 
         };
 
         if room.senders.len() >= room.size {
             drop(server);
 
             return self
-                .send_error_packet(&self.sender, "The room is full.".to_string())
+                .send_error_packet(self.sender.clone(), "The room is full.".to_string())
                 .await;
         }
 
         room.senders.push(self.sender.clone());
-
-        let senders = room.senders.clone();
-        let size = Some(room.senders.len() - 1);
-
-        drop(server);
-
         self.room_id = Some(room_id);
 
         let mut futures = vec![];
-        for sender in &senders {
+        for sender in &room.senders {
             if Arc::ptr_eq(sender, &self.sender) {
-                futures.push(self.send_packet(sender, ResponsePacket::Join { size }));
+                futures.push(self.send_packet(
+                    sender.clone(),
+                    ResponsePacket::Join {
+                        size: Some(room.senders.len() - 1),
+                    },
+                ));
             } else {
-                futures.push(self.send_packet(sender, ResponsePacket::Join { size: None }));
+                futures.push(self.send_packet(sender.clone(), ResponsePacket::Join { size: None }));
             }
         }
 
+        drop(server);
         join_all(futures).await;
     }
 
     async fn handle_leave_room(&mut self, server: &RwLock<Server>) {
         let mut server = server.write().await;
 
-        let Some(room_id) = &self.room_id else {
+        let Some(room_id) = self.room_id.clone() else {
             return;
         };
 
-        let Some(room) = server.rooms.get_mut(room_id) else {
+        let Some(room) = server.rooms.get_mut(&room_id) else {
             return;
         };
 
@@ -285,22 +288,18 @@ impl Client {
         };
 
         room.senders.remove(index);
-
-        let senders = room.senders.clone();
-
-        if room.senders.is_empty() {
-            server.rooms.remove(room_id);
-        }
-
         self.room_id = None;
 
-        drop(server);
-
         let mut futures = vec![];
-        for sender in &senders {
-            futures.push(self.send_packet(sender, ResponsePacket::Leave { index }));
+        for sender in &room.senders {
+            futures.push(self.send_packet(sender.clone(), ResponsePacket::Leave { index }));
         }
 
+        if room.senders.is_empty() {
+            server.rooms.remove(&room_id);
+        }
+
+        drop(server);
         join_all(futures).await;
     }
 
@@ -349,21 +348,18 @@ impl Client {
 
                 drop(server);
 
-                return self.send(&sender, Message::Binary(data)).await;
+                return self.send(sender, Message::Binary(data)).await;
             } else if destination == usize::from(u8::MAX) {
-                let senders = room.senders.clone();
-
-                drop(server);
-
                 let mut futures = vec![];
-                for sender in &senders {
+                for sender in &room.senders {
                     if Arc::ptr_eq(sender, &self.sender) {
                         continue;
                     }
 
-                    futures.push(self.send(sender, Message::Binary(data.clone())));
+                    futures.push(self.send(sender.clone(), Message::Binary(data.clone())));
                 }
 
+                drop(server);
                 join_all(futures).await;
             }
         }
