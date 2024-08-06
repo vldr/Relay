@@ -36,7 +36,7 @@ The following are the command-line arguments for the application:
 - `<IP>` is the IP address that should be bound to, for example: `127.0.0.1`
 - `<PORT>` is the port that should be bound to, for example: `8080`
 - `<HOST>` is the domain suffix of the [origin](https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Origin) request header.
-  - For example, `example.com` will accept requests from `example.com`, `a.example.com`, `a.b.example.com` and reject requests that do not match the suffix.
+  - For example, using `example.com` will allow requests from `example.com`, `a.example.com`, and `a.b.example.com`, while requests that do not match this suffix will be rejected.
   - If left blank, then the origin header is not checked, and requests from any origin are accepted.
 
 # Protocol
@@ -74,16 +74,16 @@ webSocket.send(new Uint8Array(255, 1, 2, 3));
 
 Creates a new room.
 
-**Note:** If the client fails to create a room, an "error" packet is sent as a response instead.
+- When creating a room, if an error occurs, an [`error`](#error-packet) packet is sent as a response.
 
-**Note:** A new room cannot be created while a client is already inside a room.
+- You cannot create a room while you are already inside another room.
 
 **Request:**
 
 | Field           | Type     | Description                                                                                                         |
 | --------------- | -------- | ------------------------------------------------------------------------------------------------------------------- |
 | type            | `string` | The value should be "create".                                                                                       |
-| size (optional) | `number` | Specifies the size of the room. The minimum value is _1_, the maximum value is _254_, and the default value is _2_. |
+| size | `number \| undefined` | Specifies the size of the room. <br><br>The minimum value is _1_, the maximum value is _254_, and the default value is _2_. |
 
 **Example:**
 
@@ -120,7 +120,7 @@ Creates a new room.
 | Field | Type     | Description                                                                                     |
 | ----- | -------- | ----------------------------------------------------------------------------------------------- |
 | type  | `string` | The value will be "create".                                                                     |
-| id    | `string` | The randomly generated identifier of the room, which is used to join the room by other clients. |
+| id    | `string` | The UUID identifier of the room, which is used to join the room. |
 
 **Example:**
 
@@ -135,18 +135,18 @@ Creates a new room.
 
 ### `join` packet
 
-Joins a room.
+Joins a room. 
 
-**Note:** If the client fails to join a room, an "error" packet is sent as a response instead.
+- When joining a room, if an error occurs, an [`error`](#error-packet) packet is sent as a response.
 
-**Note:** A room cannot be joined while a client is already inside a room.
+- You cannot join a room while you are already inside another room.
 
 **Request:**
 
 | Field | Type     | Description                         |
 | ----- | -------- | ----------------------------------- |
 | type  | `string` | The value should be "join".         |
-| id    | `string` | The identifier of the room to join. |
+| id    | `string` | The UUID identifier of the room to join. |
 
 **Example:**
 
@@ -162,7 +162,7 @@ Joins a room.
 | Field              | Type             | Description                                                                                                                                                                                                        |
 | ------------------ | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | type               | `string`         | The value will be "join".                                                                                                                                                                                          |
-| size (conditional) | `string \| null` | **Important:** The client that sent the "join" packet will receive the number of clients that are in the room (excluding themselves). Everyone else in the room will receive the "join" packet with no size field. |
+| size | `string \| undefined` | The client that sent the "join" packet will receive the number of clients currently in the room (excluding themselves). <br><br> All other clients in the room will receive the "join" packet without a size field. |
 
 **Example:**
 
@@ -222,21 +222,21 @@ Indicates that a client has left a room.
 
 Indicates that an error occurred when either joining or creating a room.
 
-**Note:** This packet is only sent during the creation or the joining of a room. You can assume that if a user gets this packet, then they're not in a room.
+This packet is only sent during the creation or the joining of a room. You can assume that if a user gets this packet, then they're not in a room.
 
 **Response:**
 
 | Field   | Type     | Description                                |
 | ------- | -------- | ------------------------------------------ |
 | type    | `string` | The value will be "error".                 |
-| message | `string` | A human-readable explanation of the error. |
+| message | `"InvalidSize" \| "AlreadyExists" \| "DoesNotExist" \| "IsFull"` | `"InvalidSize"` — The `size` parameter in the [`create`](#create-packet) packet is not valid. <br><br> `"AlreadyExists"` — The room already exists. <br><br> `"DoesNotExist"` — The room does not exist. <br><br> `"IsFull"` — The room is full. |
 
 **Example:**
 
 ```json
 {
   "type": "error",
-  "message": "The room does not exist."
+  "message": "DoesNotExist"
 }
 ```
 
@@ -278,14 +278,14 @@ The data region contains _N_ user-defined bytes, where _N_ ≥ 0.
 
 # Examples
 
-[Chat](examples/chat)  
-A simple chat application.
-
 [Cubic](https://github.com/vldr/Cubic)  
 A multiplayer WebGL voxel sandbox game.
 
 [Share](https://github.com/vldr/Share)  
 A real-time, peer-to-peer file transfer platform.
+
+[Chat](examples/chat)  
+A simple chat application.
 
 # Building
 

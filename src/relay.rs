@@ -33,8 +33,16 @@ pub enum ResponsePacket {
         index: usize,
     },
     Error {
-        message: String,
+        message: Error,
     },
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub enum Error {
+    InvalidSize,
+    AlreadyExists,
+    DoesNotExist,
+    IsFull,
 }
 
 struct Room {
@@ -99,7 +107,7 @@ impl Server {
                     .status(StatusCode::BAD_REQUEST)
                     .body(None)
                     .unwrap();
-            
+
                 return Err(response);
             };
 
@@ -173,7 +181,7 @@ impl Client {
         self.send(sender, Message::Text(serialized_packet)).await;
     }
 
-    async fn send_error_packet(&self, sender: Sender, message: String) {
+    async fn send_error_packet(&self, sender: Sender, message: Error) {
         let error_packet = ResponsePacket::Error { message };
 
         self.send_packet(sender, error_packet).await
@@ -195,10 +203,7 @@ impl Client {
             drop(server);
 
             return self
-                .send_error_packet(
-                    self.sender.clone(),
-                    "The room size is not valid".to_string(),
-                )
+                .send_error_packet(self.sender.clone(), Error::InvalidSize)
                 .await;
         }
 
@@ -207,10 +212,7 @@ impl Client {
             drop(server);
 
             return self
-                .send_error_packet(
-                    self.sender.clone(),
-                    "A room with that identifier already exists.".to_string(),
-                )
+                .send_error_packet(self.sender.clone(), Error::AlreadyExists)
                 .await;
         }
 
@@ -240,14 +242,16 @@ impl Client {
         let Some(room) = server.rooms.get_mut(&room_id) else {
             drop(server);
 
-            return self.send_error_packet(self.sender.clone(), "The room does not exist.".to_string()).await; 
+            return self
+                .send_error_packet(self.sender.clone(), Error::DoesNotExist)
+                .await;
         };
 
         if room.senders.len() >= room.size {
             drop(server);
 
             return self
-                .send_error_packet(self.sender.clone(), "The room is full.".to_string())
+                .send_error_packet(self.sender.clone(), Error::IsFull)
                 .await;
         }
 
@@ -283,7 +287,11 @@ impl Client {
             return;
         };
 
-        let Some(index) = room.senders.iter().position(|sender| Arc::ptr_eq(sender, &self.sender)) else {
+        let Some(index) = room
+            .senders
+            .iter()
+            .position(|sender| Arc::ptr_eq(sender, &self.sender))
+        else {
             return;
         };
 
@@ -306,11 +314,11 @@ impl Client {
     async fn handle_message(&mut self, server: &RwLock<Server>, message: Message) {
         if message.is_text() {
             let Ok(text) = message.into_text() else {
-                return
+                return;
             };
 
             let Ok(packet) = serde_json::from_str(&text) else {
-                return
+                return;
             };
 
             match packet {
@@ -329,7 +337,11 @@ impl Client {
                 return;
             };
 
-            let Some(index) = room.senders.iter().position(|sender| Arc::ptr_eq(sender, &self.sender)) else {
+            let Some(index) = room
+                .senders
+                .iter()
+                .position(|sender| Arc::ptr_eq(sender, &self.sender))
+            else {
                 return;
             };
 

@@ -1,6 +1,6 @@
 #[cfg(test)]
 mod tests {
-    use crate::relay::{RequestPacket, ResponsePacket, Server};
+    use crate::relay::{Error, RequestPacket, ResponsePacket, Server};
 
     use std::net::SocketAddr;
     use tokio::net::TcpListener;
@@ -193,10 +193,10 @@ mod tests {
         let mut socket = create_socket!(socket_addr);
 
         write_message!(socket, RequestPacket::Create { size: Some(0) });
-        read_message!(socket, ResponsePacket::Error { message } => assert_eq!("The room size is not valid", message));
+        read_message!(socket, ResponsePacket::Error { message } => assert!(matches!(message, Error::InvalidSize)));
 
         write_message!(socket, RequestPacket::Create { size: Some(255) });
-        read_message!(socket, ResponsePacket::Error { message } => assert_eq!("The room size is not valid", message));
+        read_message!(socket, ResponsePacket::Error { message } => assert!(matches!(message, Error::InvalidSize)));
 
         //
         // Test creating a valid room.
@@ -213,7 +213,7 @@ mod tests {
         let mut socket_2 = create_socket!(socket_addr);
 
         write_message!(socket_2, RequestPacket::Join { id: String::new() });
-        read_message!(socket_2, ResponsePacket::Error { message } => assert_eq!("The room does not exist.", message));
+        read_message!(socket_2, ResponsePacket::Error { message } => assert!(matches!(message, Error::DoesNotExist)));
 
         //
         // Test joining the room.
@@ -241,7 +241,7 @@ mod tests {
                 id: room_id.clone()
             }
         );
-        read_message!(socket_3, ResponsePacket::Error { message } => assert_eq!("The room is full.", message));
+        read_message!(socket_3, ResponsePacket::Error { message } => assert!(matches!(message, Error::IsFull)));
 
         //
         // Test joining a removed room.
@@ -256,7 +256,7 @@ mod tests {
                 id: room_id.clone()
             }
         );
-        read_message!(socket_3, ResponsePacket::Error { message } => assert_eq!("The room does not exist.", message));
+        read_message!(socket_3, ResponsePacket::Error { message } => assert!(matches!(message, Error::DoesNotExist)));
 
         //
         // Test creating a single-occupant room.
@@ -273,7 +273,7 @@ mod tests {
         let mut socket_4 = create_socket!(socket_addr);
 
         write_message!(socket_4, RequestPacket::Join { id: room_id });
-        read_message!(socket_4, ResponsePacket::Error { message } => assert_eq!("The room is full.", message));
+        read_message!(socket_4, ResponsePacket::Error { message } => assert!(matches!(message, Error::IsFull)));
 
         close_socket!(socket_3);
         close_socket!(socket_4);
@@ -483,7 +483,7 @@ mod tests {
                 id: room_id.clone()
             }
         );
-        read_message!(socket, ResponsePacket::Error { message } => assert_eq!("The room is full.", message));
+        read_message!(socket, ResponsePacket::Error { message } => assert!(matches!(message, Error::IsFull)));
 
         close_socket!(socket);
 
@@ -564,7 +564,7 @@ mod tests {
                 id: room_id.clone()
             }
         );
-        read_message!(socket, ResponsePacket::Error { message } => assert_eq!("The room does not exist.", message));
+        read_message!(socket, ResponsePacket::Error { message } => assert!(matches!(message, Error::DoesNotExist)));
 
         close_socket!(socket);
     }
