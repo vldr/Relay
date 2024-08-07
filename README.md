@@ -222,14 +222,14 @@ Indicates that a client has left a room.
 
 Indicates that an error occurred when either joining or creating a room.
 
-This packet is only sent during the creation or the joining of a room. You can assume that if a user gets this packet, then they're not in a room.
+- You can assume that if you get this packet, then you're not in a room.
 
 **Response:**
 
 | Field   | Type     | Description                                |
 | ------- | -------- | ------------------------------------------ |
 | type    | `string` | The value will be "error".                 |
-| message | `"InvalidSize" \| "AlreadyExists" \| "DoesNotExist" \| "IsFull"` | `"InvalidSize"` — The `size` parameter in the [`create`](#create-packet) packet is not valid. <br><br> `"AlreadyExists"` — The room already exists. <br><br> `"DoesNotExist"` — The room does not exist. <br><br> `"IsFull"` — The room is full. |
+| message | `"InvalidSize" \| "AlreadyExists" \| "DoesNotExist" \| "IsFull"` | `"InvalidSize"` <br>The size parameter in the [`create`](#create-packet) packet is not valid. <br><br> `"AlreadyExists"` <br> The room already exists. <br><br> `"DoesNotExist"` <br> The room does not exist. <br><br> `"IsFull"` <br>The room is full. |
 
 **Example:**
 
