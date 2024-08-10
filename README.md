@@ -162,7 +162,7 @@ Joins a room.
 | Field              | Type             | Description                                                                                                                                                                                                        |
 | ------------------ | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | type               | `string`         | The value will be "join".                                                                                                                                                                                          |
-| size | `string \| undefined` | The client that sent the "join" packet will receive the number of clients currently in the room (excluding themselves). <br><br> All other clients in the room will receive the "join" packet without a size field. |
+| size | `number \| undefined` | The client that sent the "join" packet will receive the number of clients currently in the room (excluding themselves). <br><br> All other clients in the room will receive the "join" packet without a size field. |
 
 **Example:**
 
